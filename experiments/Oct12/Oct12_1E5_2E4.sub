@@ -1,0 +1,14 @@
+#!/bin/bash
+#SBATCH -J Oct12_2E4                  # Job name
+#SBATCH -o Oct12_2E4_%j.out                  # output file (%j expands to jobID)
+#SBATCH -e Oct12_2E4_%j.err                  # error log file (%j expands to jobID)
+#SBATCH --mail-type=ALL                      # Request status by email 
+#SBATCH --mail-user=yz685@cornell.edu.       # Email address to send results to.
+#SBATCH -N 1                                 # Total number of nodes requested
+#SBATCH -n 24                                 # Total number of cores requested
+#SBATCH --get-user-env                       # retrieve the users login environment
+#SBATCH --mem=32678m                           # server memory requested (per node)
+#SBATCH -t 168:00:00                           # Time limit (hh:mm:ss)
+#SBATCH --partition=gpu              # Request partition
+#SBATCH --gres=gpu:1                  # Type/number of GPUs needed
+cd /home/yz685/SGD_diagnostics/experiments/Oct12; ./Oct12_1E5_2E4_script.sh

@@ -1,0 +1,1 @@
+/home/yz685/anaconda3/envs/RL_subtasks/bin/python /home/yz685/SGD_diagnostics/Sep27_log_gradient.py
