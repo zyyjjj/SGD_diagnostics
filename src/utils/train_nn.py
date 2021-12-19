@@ -60,12 +60,14 @@ def fit(num_epochs,
     list_val_accuracy = []
     list_training_time = []
     tensor_accum_grad = torch.Tensor().to(device) # TODO: shouldn't save this on the GPU
-    tensor_model_params = torch.Tensor().to(device)
+    #tensor_model_params = torch.Tensor().to(device)
+
+    list_alloc_mem, list_reserved_mem, list_free_reserved_mem = [], [], []
 
 
     quantities_to_record = ['norm_of_batch_grad', 'norm_of_aux_batch_grad', 'norm_of_batch_grad_change', \
     'running_avg_norm_of_batch_grad', 'norm_of_batch_grad_running_avg', 'training_loss', 'accum_grad', 
-    'model_params', 'val_acc', 'val_loss', 'time_per_epoch']
+    'model_params', 'val_acc', 'val_loss', 'time_per_epoch', 'alloc_mem', 'reserved_mem', 'free_reserved_mem']
 
     # TODO: when I log stuff, should specify epoch / batch as indices
 
@@ -133,7 +135,6 @@ def fit(num_epochs,
                 accum_grad = copy.deepcopy(accum_grad + current_gradient)
                 # TODO: This step could be using too much memory
             print('device of accumulated gradient', accum_grad.device)
-            get_memory_info()
 
             optimizer.step() 
             optimizer.zero_grad() 
@@ -156,7 +157,6 @@ def fit(num_epochs,
 
             prev_gradient = copy.deepcopy(current_gradient)
             print('device of prev_gradient', prev_gradient.device)
-            get_memory_info()
 
             # TODO: size of individual tensors:
             # "the size of a tensor a in memory is a.element_size() * a.nelement()."
@@ -169,8 +169,6 @@ def fit(num_epochs,
             norm_of_running_avg_of_grad = torch.linalg.norm(torch.mean(prev_gradients, dim = 0)).item()
             running_avg_of_norm_grad = torch.mean(torch.linalg.norm(prev_gradients, dim=1)).item()
             running_avg_of_squared_norm_grad = torch.mean(torch.linalg.norm(prev_gradients, dim=1)**2).item()
-            print('two norm signals, checking correctness: ', running_avg_of_norm_grad, running_avg_of_squared_norm_grad)
-            #print('device of norm signals', norm_of_running_avg_of_grad.device, running_avg_of_norm_grad.device)
             get_memory_info()
             print('prev_gradients size: ', prev_gradients.element_size() * prev_gradients.nelement())
             print('prev_gradients storage: ', sys.getsizeof(prev_gradients.storage()))
@@ -186,6 +184,15 @@ def fit(num_epochs,
 
 
             prof.step()
+            a, r, f = get_memory_info()
+            list_alloc_mem.append(a)
+            list_reserved_mem.append(r)
+            list_free_reserved_mem.append(f)
+
+            np.save(results_folder + 'alloc_mem/alloc_mem_' + str(trial) + '.npy', tensor_accum_grad.detach().cpu().numpy())
+
+
+
         #scheduler.step()
 
         # TODO: check: when we time an epoch in training, do we include the validation part? or just the training part
@@ -200,9 +207,9 @@ def fit(num_epochs,
         list_training_loss.append(training_loss)
         tensor_accum_grad = torch.cat([tensor_accum_grad, accum_grad], 0)
         # TODO: double check whether this is the right way to save weights
-        tensor_model_params = torch.cat([tensor_model_params, parameters_to_vector(model.parameters())], 0) 
-        print('model params tensor size: ', tensor_model_params.element_size() * tensor_model_params.nelement())
-        print('model params tensor storage: ', sys.getsizeof(tensor_model_params.storage()))
+        #tensor_model_params = torch.cat([tensor_model_params, parameters_to_vector(model.parameters())], 0) 
+        #print('model params tensor size: ', tensor_model_params.element_size() * tensor_model_params.nelement())
+        #print('model params tensor storage: ', sys.getsizeof(tensor_model_params.storage()))
             
 
         # save data as you go
