@@ -13,7 +13,6 @@ import pdb, time, argparse, itertools, copy
 import sys, os
 from utils.parse_hp_args import parse_hp_args
 from utils.train_nn import fit, accuracy
-from utils.nn_base import ImageClassificationBase
 from utils.learner import Learner
 
 # 60K
@@ -34,7 +33,7 @@ val_size = len(train_ds_whole) - train_size
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print(device)
 
-class CifarCnnModel(ImageClassificationBase):
+class CifarCnnModel(nn.Module):
     def __init__(self):
         super().__init__()
         self.conv1 = nn.Conv2d(3, 6, 5)
@@ -100,4 +99,5 @@ if __name__ == "__main__":
 
 
 
-    
+# TODO: don't forget the ReLU activation statistics idea
+# or more broadly, which parts of the connections light up most frequently?
