@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.profiler
+#import torch.profiler
 from torch.utils.data import DataLoader, random_split
 from torch.optim import SGD, Adagrad, Adam
 import torchvision
@@ -14,6 +14,7 @@ import sys, os
 from utils.parse_hp_args import parse_hp_args
 from utils.train_nn import fit, accuracy
 from utils.nn_base import ImageClassificationBase
+from utils.learner import Learner
 
 # 60K
 transform = transforms.Compose(
@@ -55,9 +56,9 @@ class CifarCnnModel(ImageClassificationBase):
 
 if __name__ == "__main__":
 
-    args, opt_kwargs, configs_set = parse_hp_args()
-    print(opt_kwargs)
+    args, base_config, opt_kwargs, loss_fn_kwargs = parse_hp_args()
     optimizer = eval(args.optimizer)
+    hp_config = [base_config, opt_kwargs, loss_fn_kwargs]
 
     seed = args.trial
     torch.manual_seed(seed)
@@ -71,55 +72,31 @@ if __name__ == "__main__":
     
     train_ds, val_ds = random_split(train_ds_whole, [train_size, val_size])
 
-    for config_pair in configs_set:
+    run = neptune.init(
+    project="zyyjjj/SGD-diagnostics",
+    api_token="eyJhcGlfYWRkcmVzcyI6Imh0dHBzOi8vYXBwLm5lcHR1bmUuYWkiLCJhcGlfdXJsIjoiaHR0cHM6Ly9hcHAubmVwdHVuZS5haSIsImFwaV9rZXkiOiIwM2RkNWY2MS01MTU1LTQxNDMtOTE3Ni1mN2RlNjY5ZTQxNWUifQ==",
+    )
 
-        print('Training on learning rate {} and batch size {}'.format(config_pair[0], config_pair[1]))
+    run["sys/tags"].add(['cifar'])  # organize things
+    run['params'] = hp_config
+        
+    model = CifarCnnModel()
+    model.to(device)
+    loss_fn = torch.nn.functional.cross_entropy
 
-        run = neptune.init(
-        project="zyyjjj/SGD-diagnostics",
-        api_token="eyJhcGlfYWRkcmVzcyI6Imh0dHBzOi8vYXBwLm5lcHR1bmUuYWkiLCJhcGlfdXJsIjoiaHR0cHM6Ly9hcHAubmVwdHVuZS5haSIsImFwaV9rZXkiOiIwM2RkNWY2MS01MTU1LTQxNDMtOTE3Ni1mN2RlNjY5ZTQxNWUifQ==",
-        )
+    learner = Learner(model, train_ds, val_ds, optimizer, loss_fn, hp_config)
 
-        run["sys/tags"].add(['cifar'])  # organize things
-        run['params'] = config_pair
+    save_label = str(args.optimizer) + \
+            '_'.join('{}_{}'.format(*p) for p in sorted(base_config.items())) + \
+            '_'.join('{}_{}'.format(*p) for p in sorted(opt_kwargs.items())) + \
+            '_'.join('{}_{}'.format(*p) for p in sorted(loss_fn_kwargs.items()))
 
-        model = CifarCnnModel()
-        model.to(device)
-        loss_fn = torch.nn.functional.cross_entropy
-
-        lr = config_pair[0]
-        batch_size = config_pair[1]
-
-        train_loader = DataLoader(train_ds, batch_size, shuffle=True)
-        val_loader = DataLoader(val_ds, batch_size)
-
-        save_label = str(args.optimizer)+"_LR_"+str(lr)+"_" +\
-                '_'.join('{}_{}'.format(*p) for p in sorted(opt_kwargs.items()))\
-                + "_BATCH_"+str(batch_size)
-
-        prof = torch.profiler.profile(
-                schedule=torch.profiler.schedule(wait=1, warmup=1, active=10),
-                on_trace_ready=torch.profiler.tensorboard_trace_handler('./log/'+save_label),
-                profile_memory = True,
-                record_shapes=True,
-                with_stack=True)
-        prof.start()
-
-        fit(args.num_epochs, 
-            lr, 
-            model, 
-            train_ds,
-            args.aux_batch_size,
-            train_loader, 
-            val_loader, 
-            trial = args.trial,
-            loss_fn = loss_fn, 
-            opt_func = optimizer, 
-            save_label = save_label,
-            device = device,
-            run=run,
-            prof = prof,
-            opt_kwargs = opt_kwargs)
+    fit(args.num_epochs, 
+        learner,
+        trial = args.trial,
+        save_label = save_label,
+        device = device,
+        run=run)
 
 
 
