@@ -14,6 +14,7 @@ import sys, os
 from utils.parse_hp_args import parse_hp_args
 from utils.train_nn import fit, accuracy
 from utils.learner import Learner
+from utils.callback import *
 
 # 60K
 transform = transforms.Compose(
@@ -69,12 +70,13 @@ if __name__ == "__main__":
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
     
+    # TODO: figure out test vs. validation data
     train_ds, val_ds = random_split(train_ds_whole, [train_size, val_size])
 
     run = neptune.init(
-    project="zyyjjj/SGD-diagnostics",
-    api_token="eyJhcGlfYWRkcmVzcyI6Imh0dHBzOi8vYXBwLm5lcHR1bmUuYWkiLCJhcGlfdXJsIjoiaHR0cHM6Ly9hcHAubmVwdHVuZS5haSIsImFwaV9rZXkiOiIwM2RkNWY2MS01MTU1LTQxNDMtOTE3Ni1mN2RlNjY5ZTQxNWUifQ==",
-    )
+        project="zyyjjj/SGD-diagnostics",
+        api_token="eyJhcGlfYWRkcmVzcyI6Imh0dHBzOi8vYXBwLm5lcHR1bmUuYWkiLCJhcGlfdXJsIjoiaHR0cHM6Ly9hcHAubmVwdHVuZS5haSIsImFwaV9rZXkiOiIwM2RkNWY2MS01MTU1LTQxNDMtOTE3Ni1mN2RlNjY5ZTQxNWUifQ==",
+        )
 
     run["sys/tags"].add(['cifar'])  # organize things
     run['params'] = hp_config
@@ -82,16 +84,17 @@ if __name__ == "__main__":
     model = CifarCnnModel()
     model.to(device)
     loss_fn = torch.nn.functional.cross_entropy
+    callbacks = []
 
-    learner = Learner(model, train_ds, val_ds, optimizer, loss_fn, hp_config)
+    learner = Learner(model, train_ds, val_ds, optimizer, loss_fn, hp_config, callbacks)
 
     save_label = str(args.optimizer) + \
             '_'.join('{}_{}'.format(*p) for p in sorted(base_config.items())) + \
             '_'.join('{}_{}'.format(*p) for p in sorted(opt_kwargs.items())) + \
             '_'.join('{}_{}'.format(*p) for p in sorted(loss_fn_kwargs.items()))
 
-    fit(args.num_epochs, 
-        learner,
+
+    learner.fit(args.num_epochs, 
         trial = args.trial,
         save_label = save_label,
         device = device,
@@ -101,3 +104,4 @@ if __name__ == "__main__":
 
 # TODO: don't forget the ReLU activation statistics idea
 # or more broadly, which parts of the connections light up most frequently?
+# can write a custom callback class to monitor this

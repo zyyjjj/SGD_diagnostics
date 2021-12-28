@@ -22,9 +22,10 @@ class BaseCallback():
     def on_epoch_end(self): pass
     def on_train_batch_start(self): pass
     def on_train_batch_end(self): pass
+    def on_train_end(self): pass
     def on_val_batch_start(self): pass
     def on_val_batch_end(self): pass
-
+    def on_val_end(self): pass
     def on_loss_begin(self): pass
     def on_loss_end(self): pass
     def on_step_begin(self): pass
@@ -86,4 +87,6 @@ class ModelSaver(BaseCallback):
     def on_epoch_end(self):
         return super().on_epoch_end()
 
-# torch.save(modelA.state_dict(), PATH)
+# save model
+#model_path = results_folder + 'model_epoch_' + str(epoch) + '.pth'
+#torch.save(learner.model.state_dict(), model_path)
