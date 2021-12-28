@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 from torch.nn.utils import parameters_to_vector
+import torch.nn.functional as F
 from typing import *
 import copy
 from .get_memory_info import get_memory_info 
@@ -11,12 +12,12 @@ class BaseCallback():
     """
     Base class for callbacks
     I'd like this to handle:
-    1. logging metrics and time/resource consumption every epoch and/or every batch
-    2. early stopping: if new values do not surpass the best so far for a while --> not improving 
+    1. [done] logging metrics and time/resource consumption every epoch and/or every batch
+    2. [done] early stopping: if new values do not surpass the best so far for a while --> not improving --Are there other ways of pruning, e.g., median pruning?
     3. learning rate scheduling
     4. gradient clipping
     5. gradient accumulation
-    6. saving model checkpoints (each epoch, best so far)
+    6. [done] saving model checkpoints (each epoch, best so far)
 
     NOTE: when inheriting, can pass in different arguments for different functions
     """
@@ -41,7 +42,7 @@ class MetricsLogger(BaseCallback):
     # nested if metric is logged on a per-batch basis; unnested if on a per-epoch basis
 
     def __init__(self, results_folder): 
-                
+
         self.logged_metrics = {}
         self.results_folder = results_folder # has trial info
 
@@ -49,9 +50,8 @@ class MetricsLogger(BaseCallback):
         self.prev_grads = torch.Tensor().cpu()
         # self.model_params = torch.Tensor().cpu() # is this necessary? maybe for regularization, or edge activation statistics
 
-    def on_epoch_begin(self, learnesr): 
-        # initialize empty lists for logging; create directories
-        
+    def on_epoch_begin(self, learnesr):  
+
         self.new_epoch = True
         self.epoch_accum_grad = torch.Tensor().cpu()        
     
@@ -89,6 +89,7 @@ class MetricsLogger(BaseCallback):
 
     # return dictionary of additional signals
     def batch_gradient_signals(self, learner):
+
         batch_grad = parameters_to_vector(j.grad for j in learner.model.parameters()).cpu()
         norm_batch_grad = torch.linalg.norm(batch_grad).item()
         norm_aux_batch_grad = torch.linalg.norm(parameters_to_vector(j.grad for j in learner.aux_model.parameters()).cpu()).item()
@@ -98,6 +99,11 @@ class MetricsLogger(BaseCallback):
         
         denoise_signal_1 = norm_batch_grad**2 - 1/2 * norm_change_batch_grad**2
         denoise_signal_2 = denoise_signal_1 / norm_batch_grad**2
+
+        if self.prev_grad:
+            cosine_sim_batch_grad = F.cosine_similarity(self.prev_grad, batch_grad, dim=0)
+        else:
+            cosine_sim_batch_grad = np.nan
 
         self.prev_grad = batch_grad.detach().clone()
         self.epoch_accum_grad.add_(batch_grad)
@@ -117,6 +123,7 @@ class MetricsLogger(BaseCallback):
                 'norm_change_batch_grad': norm_change_batch_grad,\
                 'denoise_signal_1': denoise_signal_1,\
                 'denoise_signal_2': denoise_signal_2,\
+                'cosine_sim_batch_grad': cosine_sim_batch_grad,\
                 'norm_of_running_avg_of_batch_grad': norm_of_running_avg_of_batch_grad,\
                 'running_avg_of_norm_batch_grad': running_avg_of_norm_batch_grad,\
                 'running_avg_of_squared_norm_batch_grad': running_avg_of_squared_norm_batch_grad,\
