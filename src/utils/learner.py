@@ -36,8 +36,7 @@ class Learner():
         self.loss_fn = loss_fn(**self.loss_fn_kwargs)
         self.stop = False
 
-        # TODO: have some version of this to enable early stopping
-        self.metric_history = None
+        self.logged_metrics = None # TODO: or empty dictionary?
 
     def fit(self, num_epochs, trial, save_label, device, run):
 
@@ -83,9 +82,11 @@ class Learner():
                 loss.backward() 
 
                 # compute auxiliary gradient for a larger batch size
-                aux_model = copy.deepcopy(self.model)
-                aux_loss = self.loss_fn(aux_model(aux_input), aux_output)
+                self.aux_model = copy.deepcopy(self.model)
+                aux_loss = self.loss_fn(self.aux_model(aux_input), aux_output)
                 aux_loss.backward()
+
+                self._evoke_callback('on_after_backward')
 
                 self.optimizer.step() 
                 self.optimizer.zero_grad() 
@@ -107,7 +108,8 @@ class Learner():
             # TODO: HERE log training time, training loss, accum_grad, model_params
             # save the batch-wise metric values in this epoch
 
-
+            # with saving metrics: play with regular expressions
+            # make them both a function and folder name
 
             
             self.model.eval()
@@ -138,6 +140,8 @@ class Learner():
 
 
             # TODO: Test set?????
+            # should be ok, not needed here
+            # train on training data --> tune on validation data --> final test on test data
 
             self._evoke_callback('on_epoch_end')
             # TODO HERE save the model
