@@ -86,7 +86,7 @@ if __name__ == "__main__":
     loss_fn = torch.nn.functional.cross_entropy
     callbacks = []
 
-    learner = Learner(model, train_ds, val_ds, optimizer, loss_fn, hp_config, callbacks)
+    learner = Learner(model, train_ds, val_ds, optimizer, loss_fn, hp_config, callbacks, run)
 
     save_label = str(args.optimizer) + \
             '_'.join('{}_{}'.format(*p) for p in sorted(base_config.items())) + \
@@ -97,8 +97,7 @@ if __name__ == "__main__":
     learner.fit(args.num_epochs, 
         trial = args.trial,
         save_label = save_label,
-        device = device,
-        run=run)
+        device = device)
 
 
 

@@ -2,6 +2,9 @@ import numpy as np
 import torch
 from torch.nn.utils import parameters_to_vector
 from typing import *
+import copy
+from .get_memory_info import get_memory_info 
+
 
 
 class BaseCallback():
@@ -28,79 +31,33 @@ class BaseCallback():
     def on_val_batch_start(self): pass
     def on_val_batch_end(self): pass
     def on_val_end(self): pass
-    def on_loss_begin(self): pass
-    def on_loss_end(self): pass
-    def on_step_begin(self): pass
-    def on_step_end(self): pass
-
-class EarlyStopping(BaseCallback):
-    def __init__(self, metric, patience, tolerance_thresh, improvement_thresh = 0, to_minimize = True):
-        super().__init__()
-        self.metric = metric
-        self.patience = patience
-        self.improvement_thresh = improvement_thresh
-        self.tolerance_thresh = tolerance_thresh
-        self.to_minimize = to_minimize
-        self.best_so_far = np.inf if to_minimize else -np.inf
-
-    def do_early_stopping(self, learner):
-        # if no improvement in the last {patience} epochs, stop
-        # e.g., if minimizing, then loss(t) - loss(t-1) over last {patience} t values
-        # sum to something larger than {tolerance_thresh}
-
-        # TODO: for this, need a log of the history of metric values
-        val_loss_history = learner.logged_metrics['val_loss']
-        pass
 
 
-    def on_epoch_end(self, learner,  **kwargs):
-        # if the monitored metrics got worse set a flag to stop training
-        #if some_fct(learner.last_metrics): return {'stop_training': True}
-
-        if self.do_early_stopping():
-            learner.stop = True
-        else:
-            learner.stop = False
-
-        # TODO: think where to assign the "to_stop" attribute
 
 class MetricsLogger(BaseCallback):
 
-    def __init__(self, results_folder): 
-        self.logged_metrics = {}
-        self.results_folder = results_folder
+    # log useful metrics
+    # save metrics as a dictionary of nested or unnested lists
+    # nested if metric is logged on a per-batch basis; unnested if on a per-epoch basis
 
-    def on_epoch_begin(self): 
+    def __init__(self, results_folder): 
+                
+        self.logged_metrics = {}
+        self.results_folder = results_folder # has trial info
+
+        self.prev_grad = None
+        self.prev_grads = torch.Tensor().cpu()
+        # self.model_params = torch.Tensor().cpu() # is this necessary? maybe for regularization, or edge activation statistics
+
+    def on_epoch_begin(self, learnesr): 
         # initialize empty lists for logging; create directories
         
         self.new_epoch = True
-
-        list_running_avg_norm_of_batch_grad = []
-        list_norm_of_batch_grad_running_avg = []
-        list_training_time = []
-        tensor_accum_grad = torch.Tensor().cpu() # TODO: shouldn't save this on the GPU
-        tensor_model_params = torch.Tensor().cpu()
-        prev_gradient = None
-        prev_gradients = torch.Tensor().cpu()  
-
-
-
-    def on_train_batch_begin(self, batch_idx):
-        # save batch checkpoints
-        return super().on_batch_begin()
+        self.epoch_accum_grad = torch.Tensor().cpu()        
     
-    def on_after_backward(self, learner, run):
+    def on_after_backward(self, learner):
 
-        #batch_gradient = parameters_to_vector(j.grad for j in learner.model.parameters()).cpu()
-        #aux_batch_gradient = parameters_to_vector(j.grad for j in learner.aux_model.parameters()).cpu()
-        #norm_batch_gradient = torch.linalg.norm(batch_gradient).item()
-        #norm_aux_batch_gradient = torch.linalg.norm(aux_batch_gradient).item()
-
-        #run['signals/batch/norm_batch_gradient'].log(norm_batch_gradient)
-        #run['signals/batch/norm_aux_batch_gradient'].log(norm_aux_batch_gradient)
-        #run['signals/batch/squared_diff_batch_gradient'].log(norm_batch_gradient**2 - norm_aux_batch_gradient**2)
-
-        signals = self.batch_gradient_signals(learner)
+        signals = self.batch_gradient_signals()
 
         # append batch-wise signals to self.logged_metrics        
         for k, v in signals.items():
@@ -115,39 +72,67 @@ class MetricsLogger(BaseCallback):
 
         # log to neptune
         for k, v in signals.items():
-            run['signals/batch/' + k].log(v)
+            learner.run['signals/batch/' + k].log(v)
 
-    def on_train_end(self, training_loss, training_time):
-        # log useful metrics
-        # save metrics as a dictionary of nested or unnested lists
-        # nested if metric is logged on a per-batch basis; unnested if on a per-epoch basis
+    def on_train_end(self, learner,  training_loss, training_time):
+
+        if 'traning_loss' not in self.logged_metrics.keys():
+            self.logged_metrics['training_loss'] = []
+        if 'training_time' not in self.logged_metrics.keys():
+            self.logged_metrics['training_time'] = []
+
         self.logged_metrics['training_loss'].append(training_loss)
         self.logged_metrics['training_time'].append(training_time)
+        learner.run['metrics/epoch/training_loss'].log(training_loss)
+        learner.run['metrics/epoch/training_time'].log(training_time)
+
 
     # return dictionary of additional signals
     def batch_gradient_signals(self, learner):
-        batch_gradient = parameters_to_vector(j.grad for j in learner.model.parameters()).cpu()
-        norm_batch_gradient = torch.linalg.norm(batch_gradient).item()
-        norm_aux_batch_gradient = torch.linalg.norm(parameters_to_vector(j.grad for j in learner.aux_model.parameters()).cpu()).item()
-        diff_sq_norm_main_aux_batch_gradients = norm_batch_gradient**2 - norm_aux_batch_gradient**2
+        batch_grad = parameters_to_vector(j.grad for j in learner.model.parameters()).cpu()
+        norm_batch_grad = torch.linalg.norm(batch_grad).item()
+        norm_aux_batch_grad = torch.linalg.norm(parameters_to_vector(j.grad for j in learner.aux_model.parameters()).cpu()).item()
+        diff_sq_norm_main_aux_batch_grads = norm_batch_grad**2 - norm_aux_batch_grad**2
+
+        norm_change_batch_grad = torch.linalg.norm(batch_grad - self.prev_grad)
+        
+        denoise_signal_1 = norm_batch_grad**2 - 1/2 * norm_change_batch_grad**2
+        denoise_signal_2 = denoise_signal_1 / norm_batch_grad**2
+
+        self.prev_grad = batch_grad.detach().clone()
+        self.epoch_accum_grad.add_(batch_grad)
 
         # to handle stuff with prev_gradients:
-        # first, need to log the gradients (in vector form)
-        # also, use self.logged_metrics to query previous gradients to compute running averages
+        #prev_grads = copy.deepcopy(torch.cat((self.prev_grads, batch_grad.unsqueeze(0))))[-learner.base_config['running_avg_window_size']:, :]
+        self.prev_grads = torch.cat((self.prev_grads, batch_grad.unsqueeze(0))).detach().clone()[-learner.base_config['running_avg_window_size']:, :]
+        norm_of_running_avg_of_batch_grad = torch.linalg.norm(torch.mean(self.prev_grads, dim = 0)).item()
+        running_avg_of_norm_batch_grad = torch.mean(torch.linalg.norm(self.prev_grads, dim=1)).item()
+        running_avg_of_squared_norm_batch_grad = torch.mean(torch.linalg.norm(self.prev_grads, dim=1)**2).item()
 
+        denoise_signal_3 = learner.base_config['running_avg_window_size'] * norm_of_running_avg_of_batch_grad**2 - running_avg_of_squared_norm_batch_grad
 
-        # sth like self.logged_metrics['gradient_history']
-        # a list of tensors, or a list of flattened tensors? turned into np array?
-        batch_gradient.numpy()
+        return {'norm_batch_grad': norm_batch_grad,\
+                'norm_aux_batch_grad': norm_aux_batch_grad,\
+                'diff_sq_norm_main_aux_batch_grads': diff_sq_norm_main_aux_batch_grads,\
+                'norm_change_batch_grad': norm_change_batch_grad,\
+                'denoise_signal_1': denoise_signal_1,\
+                'denoise_signal_2': denoise_signal_2,\
+                'norm_of_running_avg_of_batch_grad': norm_of_running_avg_of_batch_grad,\
+                'running_avg_of_norm_batch_grad': running_avg_of_norm_batch_grad,\
+                'running_avg_of_squared_norm_batch_grad': running_avg_of_squared_norm_batch_grad,\
+                'denoise_signal_3': denoise_signal_3}
 
+    def on_train_end(self, learner):
 
+        if 'epoch_accum_grad' not in self.logged_metrics.keys():
+            self.logged_metrics['epoch_accum_grad'] = []
 
-        return {'norm_batch_gradient': norm_batch_gradient,\
-                'norm_aux_batch_gradient': norm_aux_batch_gradient,\
-                'diff_sq_norm_main_aux_batch_gradients': diff_sq_norm_main_aux_batch_gradients}
+        norm_epoch_accum_grad = torch.linalg.norm(self.epoch_accum_grad)
+        self.logged_metrics['epoch_accum_grad'].append(norm_epoch_accum_grad)
+        learner.run['metrics/epoch/accum_grad'].log(norm_epoch_accum_grad)
 
-    # TODO: how to pass in kwargs?
-    def on_val_end(self, val_loss, val_acc):
+    # TODO: how to pass in *args and **kwargs?
+    def on_val_end(self, learner, val_loss, val_acc):
         self.logged_metrics['val_loss'].append(val_loss)
         self.logged_metrics['val_acc'].append(val_acc)
 
@@ -156,10 +141,45 @@ class MetricsLogger(BaseCallback):
         model_path = self.results_folder + 'model_epoch_' + str(epoch) + '.pth'
         torch.save(learner.model.state_dict(), model_path)
 
-        # merge self.logged_metrics to learner.logged_metrics
+        for k in learner.logged_performance_metrics.keys():
+            learner.logged_performance_metrics[k].append(self.logged_metrics[k][-1])
+        
+        np.save(self.results_folder + 'logged_metrics.npy', self.logged_metrics)
+        np.save(self.results_folder + 'logged_performance_metrics.npy', learner.logged_performance_metrics)
 
     
 
+class EarlyStopping(BaseCallback):
+    def __init__(self, patience, metric = 'val_loss', tolerance_thresh = 0, to_minimize = True):
+        super().__init__()
+        self.metric = metric
+        self.patience = patience
+        self.tolerance_thresh = tolerance_thresh
+        self.to_minimize = to_minimize
+        self.best_so_far = np.inf if to_minimize else -np.inf
+
+
+    def do_early_stopping(self, learner):
+        # if no improvement in the last {patience} epochs, stop
+        # e.g., if minimizing, then loss(t) - loss(t-1) over last {patience} t values
+        # sum to something larger than {tolerance_thresh}
+
+        val_loss_history = learner.logged_metrics[self.metric]
+
+        if self.to_minimize:
+            if sum(val_loss_history[-self.patience:]) > self.tolerance_thresh:
+                return True
+        else:
+            if sum(val_loss_history[-self.patience:]) < self.tolerance_thresh:
+                return True
+        
+        return False
+
+    def on_epoch_end(self, learner,  **kwargs):
+        # if the monitored metrics got worse set a flag to stop training
+
+        if self.do_early_stopping():
+            learner.stop = True
 class LRMonitor(BaseCallback):
     pass
 
