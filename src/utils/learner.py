@@ -47,7 +47,7 @@ class Learner():
 
             tic_epoch_start = time.time()
 
-            aux_indices = random.sample(range(len(self.train_ds)), self.aux_batch_size)
+            aux_indices = random.sample(range(len(self.train_ds)), self.base_config['aux_batch_size'])
             auxiliary_ds = Subset(self.train_ds, aux_indices) 
             aux_loader = DataLoader(auxiliary_ds, len(auxiliary_ds))
             for aux_data in aux_loader:
