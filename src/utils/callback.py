@@ -23,15 +23,15 @@ class BaseCallback():
     """
 
     def __init__(self): pass
-    def on_epoch_start(self): pass
-    def on_epoch_end(self): pass
-    def on_train_batch_start(self): pass
-    def on_after_backward(self): pass
-    def on_train_batch_end(self): pass
-    def on_train_end(self): pass
-    def on_val_batch_start(self): pass
-    def on_val_batch_end(self): pass
-    def on_val_end(self): pass
+    def on_epoch_start(self, learner): pass
+    def on_epoch_end(self, learner): pass
+    def on_train_batch_start(self, learner): pass
+    def on_after_backward(self, learner): pass
+    def on_train_batch_end(self, learner): pass
+    def on_train_end(self, learner): pass
+    def on_val_batch_start(self, learner): pass
+    def on_val_batch_end(self, learner): pass
+    def on_val_end(self, learner): pass
 
 class MetricsLogger(BaseCallback):
 
@@ -48,7 +48,7 @@ class MetricsLogger(BaseCallback):
         self.prev_grads = torch.Tensor().cpu()
         # self.model_params = torch.Tensor().cpu() # is this necessary? maybe for regularization, or edge activation statistics
 
-    def on_epoch_start(self):  
+    def on_epoch_start(self, learner):  
 
         self.new_epoch = True
         self.epoch_accum_grad = torch.Tensor().cpu()        

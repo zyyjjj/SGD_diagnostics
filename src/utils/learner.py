@@ -24,7 +24,7 @@ class Learner():
         self.train_loader = DataLoader(train_ds, self.base_config['batch_size'], shuffle=True)
         self.val_loader = DataLoader(val_ds, self.base_config['batch_size'])
         self.optimizer = opt(self.model.parameters(), self.base_config['lr'], **self.opt_kwargs)
-        self.loss_fn = loss_fn(**self.loss_fn_kwargs)
+        self.loss_fn = loss_fn
         self.run = run
 
         self.stop = False
@@ -62,12 +62,12 @@ class Learner():
 
                 # train and log
                 train_input, train_output = train_input.to(device), train_output.to(device)
-                loss = self.loss_fn(self.model(train_input), train_output) 
+                loss = self.loss_fn(self.model(train_input), train_output, **self.loss_fn_kwargs) 
                 loss.backward() 
 
                 # compute auxiliary gradient for a larger batch size
                 self.aux_model = copy.deepcopy(self.model)
-                aux_loss = self.loss_fn(self.aux_model(aux_input), aux_output)
+                aux_loss = self.loss_fn(self.aux_model(aux_input), aux_output, **self.loss_fn_kwargs)
                 aux_loss.backward()
 
                 self._evoke_callback('on_after_backward')
@@ -98,7 +98,7 @@ class Learner():
                 with torch.no_grad():
                     pred_output = self.model(val_input)
 
-                val_loss = self.loss_fn(pred_output, val_output).item()
+                val_loss = self.loss_fn(pred_output, val_output, **self.loss_fn_kwargs).item()
                 self.current_val_loss += val_loss
                 val_acc = accuracy(pred_output, val_output)
                 self.curernt_val_acc += val_acc
