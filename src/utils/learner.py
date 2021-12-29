@@ -19,30 +19,28 @@ class Learner():
     def __init__(self, model, train_ds, val_ds, opt, loss_fn, hp_config, callbacks, run):
 
         self.model, self.train_ds, self.val_ds = model, train_ds, val_ds
-        
         self.callbacks = listify(callbacks)
-
         self.base_config, self.opt_kwargs, self.loss_fn_kwargs = hp_config
-        
         self.train_loader = DataLoader(train_ds, self.base_config['batch_size'], shuffle=True)
         self.val_loader = DataLoader(val_ds, self.base_config['batch_size'])
-
         self.optimizer = opt(self.model.parameters(), self.base_config['lr'], **self.opt_kwargs)
         self.loss_fn = loss_fn(**self.loss_fn_kwargs)
         self.run = run
 
         self.stop = False
         self.logged_performance_metrics = {'training_loss': [], 'val_loss': [], 'val_acc': []}
+        self.epoch = 0
+        self.current_training_loss, self.current_val_loss, self.current_val_acc = 0.0, 0.0, 0.0
+        self.current_epoch_training_time = 0
 
-    def fit(self, num_epochs, trial, save_label, device):
 
-        script_dir = os.path.abspath(os.getcwd())
-        results_folder = script_dir + "/results/" + save_label + "/" + "trial_" + str(trial) + "/" 
-        os.makedirs(results_folder, exist_ok=True)
+    def fit(self, num_epochs, device):
 
         # HERE initialize empty tensors and lists using MetricsLogger
 
         for epoch in range(num_epochs):
+
+            self.epoch = epoch
 
             self.model.train()
             self._evoke_callback('on_epoch_start')
@@ -57,7 +55,7 @@ class Learner():
             aux_input = aux_input.to(device)
             aux_output = aux_output.to(device)
         
-            training_loss = 0.0
+            self.current_training_loss = 0.0
 
             for train_input, train_output in self.train_loader:
                 self._evoke_callback('on_train_batch_start')
@@ -77,31 +75,22 @@ class Learner():
                 self.optimizer.step() 
                 self.optimizer.zero_grad() 
 
-                training_loss += loss.item()
+                self.current_training_loss += loss.item()
 
                 self._evoke_callback('on_train_batch_end')
-                # HERE 1. log batch gradient and aux batch gradient
-                # 2. also compute norm of the two
-                # 3. accumulate the epoch gradient
-                # 4. compute cosine sim, norm of change, and other signals
-                # 5. compute running avg of gradients / squared norm of gradients
-                # 6. monitor memory
-                # append to list and log in neptune run
+
 
             toc_epoch_end = time.time()
-            training_loss /= len(self.train_loader)
+            self.current_epoch_training_time = toc_epoch_end - tic_epoch_start
+            self.current_training_loss /= len(self.train_loader)
+
             self._evoke_callback('on_train_end')
-            # HERE log training time, training loss, accum_grad, model_params
-            # save the batch-wise metric values in this epoch
 
-            # with saving metrics: play with regular expressions
-            # make them both a function and folder name
-
-            
             self.model.eval()
-            validation_loss = 0.0
-            validation_acc = 0.0
+            self.current_val_loss = 0.0
+            self.current_val_acc = 0.0
             for val_input, val_output in self.val_loader:
+                
                 self._evoke_callback('on_val_batch_start')
                 
                 # validation
@@ -110,33 +99,28 @@ class Learner():
                     pred_output = self.model(val_input)
 
                 val_loss = self.loss_fn(pred_output, val_output).item()
-                validation_loss += val_loss
-
+                self.current_val_loss += val_loss
                 val_acc = accuracy(pred_output, val_output)
-                validation_acc += val_acc
+                self.curernt_val_acc += val_acc
 
                 self._evoke_callback('on_val_batch_end')
 
-            validation_loss /= len(self.val_loader)
-            validation_acc /= len(self.val_loader)
+            self.current_val_loss /= len(self.val_loader)
+            self.current_val_acc /= len(self.val_loader)
 
             self._evoke_callback('on_val_end')
-            # HERE log val_loss and val_acc
-            # also keep a history of val_loss for early stopping
 
-
-            # TODO: Test set?????
-            # should be ok, not needed here
+            # TODO: Probably don't need test set here; revisit.
             # train on training data --> tune on validation data --> final test on test data
 
             self._evoke_callback('on_epoch_end')
-            # HERE save the model
 
             if self.stop == True:
                 break
 
     # PyTorch Lightning trainer.py line 1542
     # BIG TODO now: figure out how the *args and **kwargs are passed in
+    # Question: what about callback-specific *kwargs 
     def _evoke_callback(self, checkpoint_name, *args, **kwargs):
         for callback in self.callbacks:
             fn = getattr(callback, checkpoint_name)

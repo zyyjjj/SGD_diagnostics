@@ -33,8 +33,6 @@ class BaseCallback():
     def on_val_batch_end(self): pass
     def on_val_end(self): pass
 
-
-
 class MetricsLogger(BaseCallback):
 
     # log useful metrics
@@ -50,7 +48,7 @@ class MetricsLogger(BaseCallback):
         self.prev_grads = torch.Tensor().cpu()
         # self.model_params = torch.Tensor().cpu() # is this necessary? maybe for regularization, or edge activation statistics
 
-    def on_epoch_begin(self, learnesr):  
+    def on_epoch_start(self):  
 
         self.new_epoch = True
         self.epoch_accum_grad = torch.Tensor().cpu()        
@@ -74,17 +72,17 @@ class MetricsLogger(BaseCallback):
         for k, v in signals.items():
             learner.run['signals/batch/' + k].log(v)
 
-    def on_train_end(self, learner,  training_loss, training_time):
+    def on_train_end(self, learner):
 
         if 'traning_loss' not in self.logged_metrics.keys():
             self.logged_metrics['training_loss'] = []
         if 'training_time' not in self.logged_metrics.keys():
             self.logged_metrics['training_time'] = []
 
-        self.logged_metrics['training_loss'].append(training_loss)
-        self.logged_metrics['training_time'].append(training_time)
-        learner.run['metrics/epoch/training_loss'].log(training_loss)
-        learner.run['metrics/epoch/training_time'].log(training_time)
+        self.logged_metrics['training_loss'].append(learner.current_training_loss)
+        self.logged_metrics['training_time'].append(learner.current_epoch_training_time)
+        learner.run['metrics/epoch/training_loss'].log(learner.current_training_loss)
+        learner.run['metrics/epoch/training_time'].log(learner.current_epoch_training_time)
 
 
     # return dictionary of additional signals
@@ -139,13 +137,13 @@ class MetricsLogger(BaseCallback):
         learner.run['metrics/epoch/accum_grad'].log(norm_epoch_accum_grad)
 
     # TODO: how to pass in *args and **kwargs?
-    def on_val_end(self, learner, val_loss, val_acc):
-        self.logged_metrics['val_loss'].append(val_loss)
-        self.logged_metrics['val_acc'].append(val_acc)
+    def on_val_end(self, learner):
+        self.logged_metrics['val_loss'].append(learner.current_val_loss)
+        self.logged_metrics['val_acc'].append(learner.current_val_acc)
 
-    def on_epoch_end(self, learner, epoch):
+    def on_epoch_end(self, learner):
         # save model
-        model_path = self.results_folder + 'model_epoch_' + str(epoch) + '.pth'
+        model_path = self.results_folder + 'model_epoch_' + str(learner.epoch) + '.pth'
         torch.save(learner.model.state_dict(), model_path)
 
         for k in learner.logged_performance_metrics.keys():
@@ -175,6 +173,7 @@ class EarlyStopping(BaseCallback):
 
         if self.to_minimize:
             if sum(val_loss_history[-self.patience:]) > self.tolerance_thresh:
+                print("No improvement in the last {} epochs, terminating this run.".format(self.patience) )
                 return True
         else:
             if sum(val_loss_history[-self.patience:]) < self.tolerance_thresh:
@@ -182,7 +181,7 @@ class EarlyStopping(BaseCallback):
         
         return False
 
-    def on_epoch_end(self, learner,  **kwargs):
+    def on_epoch_end(self, learner):
         # if the monitored metrics got worse set a flag to stop training
 
         if self.do_early_stopping():

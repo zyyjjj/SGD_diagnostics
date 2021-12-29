@@ -85,20 +85,21 @@ if __name__ == "__main__":
     model = CifarCnnModel()
     model.to(device)
     loss_fn = torch.nn.functional.cross_entropy
-    callbacks = []
-
-    learner = Learner(model, train_ds, val_ds, optimizer, loss_fn, hp_config, callbacks, run)
-
+    
     save_label = str(args.optimizer) + \
             '_'.join('{}_{}'.format(*p) for p in sorted(base_config.items())) + \
             '_'.join('{}_{}'.format(*p) for p in sorted(opt_kwargs.items())) + \
             '_'.join('{}_{}'.format(*p) for p in sorted(loss_fn_kwargs.items()))
 
+    script_dir = os.path.abspath(os.getcwd())
+    results_folder = script_dir + "/results/" + save_label + "/" + "trial_" + str(args.trial) + "/" 
+    os.makedirs(results_folder, exist_ok=True)
 
-    learner.fit(args.num_epochs, 
-        trial = args.trial,
-        save_label = save_label,
-        device = device)
+    callbacks = [MetricsLogger(results_folder), EarlyStopping(metric = 'val_loss', patience = 5)]
+
+    learner = Learner(model, train_ds, val_ds, optimizer, loss_fn, hp_config, callbacks, run)
+
+    learner.fit(args.num_epochs, device = device)
 
 
 
