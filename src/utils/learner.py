@@ -101,7 +101,7 @@ class Learner():
                 val_loss = self.loss_fn(pred_output, val_output, **self.loss_fn_kwargs).item()
                 self.current_val_loss += val_loss
                 val_acc = accuracy(pred_output, val_output)
-                self.curernt_val_acc += val_acc
+                self.current_val_acc += val_acc
 
                 self._evoke_callback('on_val_batch_end')
 
