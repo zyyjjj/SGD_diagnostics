@@ -36,6 +36,19 @@ print(device)
 
 class CifarCnnModel(nn.Module):
     # TODO: find a better (SOTA) network architecture
+
+    """
+    Experiments in Jian's paper:
+    1. Simple proof-of-concept on MNIST
+        1) architecture: 2-layer MLP
+        2) hps: lr, dropout rate, batch size, number of units in layer 1 and layer 2
+    2. CNN on CIFAR-10 and SVHN
+        1) architecture: 3 conv blocks and a soft max classification layer; each block has two conv layers with the same # filters, followed by a max-pooling layer; no dropout or batchnorm
+        2) standard data augmentation: horizontal and vertical shifts, horizontal flips
+        3) hps: lr, batch size, number of filters in conv blocks 1, 2, and 3
+    """
+
+
     def __init__(self):
         super().__init__()
         self.conv1 = nn.Conv2d(3, 6, 5)
@@ -60,6 +73,8 @@ if __name__ == "__main__":
     args, base_config, opt_kwargs, loss_fn_kwargs = parse_hp_args()
     optimizer = eval(args.optimizer)
     hp_config = [base_config, opt_kwargs, loss_fn_kwargs]
+
+    print('Training with the following config', hp_config)
 
     seed = args.trial
     torch.manual_seed(seed)
@@ -95,7 +110,7 @@ if __name__ == "__main__":
     results_folder = script_dir + "/results/" + save_label + "/" + "trial_" + str(args.trial) + "/" 
     os.makedirs(results_folder, exist_ok=True)
 
-    callbacks = [MetricsLogger(results_folder), EarlyStopping(metric = 'val_loss', patience = 5)]
+    callbacks = [MetricsLogger(results_folder), EarlyStopping(metric = 'val_acc', patience = 5, warmup = 20, to_minimize=False, tolerance_thresh=0.05)]
 
     learner = Learner(model, train_ds, val_ds, optimizer, loss_fn, hp_config, callbacks, run)
 
