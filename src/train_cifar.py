@@ -58,20 +58,20 @@ class CifarCnnModel(nn.Module):
         self.convblock1 = nn.Sequential(
             nn.Conv2d(3, 6, 5),
             nn.ReLU(),
-            nn.Conv2d(6, 16, 5),
+            nn.Conv2d(6, 6, 5),
             nn.ReLU(),
-            nn.maxPool2d(2,2)
+            nn.MaxPool2d(2,2)
         )
 
         self.convblock2 = nn.Sequential(
-            nn.Conv2d(16, 32, 5),
+            nn.Conv2d(3, 6, 5),
             nn.ReLU(),
-            nn.Conv2d(32, 64, 5),
+            nn.Conv2d(6, 6, 5),
             nn.ReLU(),
-            nn.maxPool2d(2,2)
+            nn.MaxPool2d(2,2)
         )
 
-        self.fc1 = nn.Linear(5 * 5 * 64, 256)
+        self.fc1 = nn.Linear(5 * 5 * 3, 256)
         self.fc2 = nn.Linear(256, 10)
 
 
