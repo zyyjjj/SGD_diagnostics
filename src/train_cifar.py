@@ -50,31 +50,30 @@ class CifarCnnModel(nn.Module):
     """
 
 
-    def __init__(self):
-        super().__init__()
-
+    def __init__(self, n_channels = 16):
+        
         # TODO: enable customizing the architecture from input
 
         self.convblock1 = nn.Sequential(
-            nn.Conv2d(3, 16, 5),
+            nn.Conv2d(3, n_channels, kernel_size = 3, padding = 1),
             nn.ReLU(),
-            nn.Conv2d(16, 16, 5),
+            nn.Conv2d(n_channels, n_channels, kernel_size = 3, padding = 1),
             nn.ReLU(),
-            nn.MaxPool2d(2,2)
+            nn.MaxPool2d(2,2) # output is 16 * 16 * 16
         )
 
         self.convblock2 = nn.Sequential(
-            nn.Conv2d(16, 16, 5),
+            nn.Conv2d(n_channels, n_channels, kernel_size = 3, padding = 1),
             nn.ReLU(),
-            nn.Conv2d(16, 16, 5),
+            nn.Conv2d(n_channels, n_channels, kernel_size = 3, padding = 1),
             nn.ReLU(),
-            nn.MaxPool2d(2,2)
+            nn.MaxPool2d(2,2) # output is 16 * 8 * 8
         )
 
         self.flatten = nn.Flatten()
 
         self.fc1 = nn.Sequential(
-            nn.Linear(2 * 2 * 16, 256),
+            nn.Linear(4 * 4 * n_channels, 256),
             nn.ReLU()
         )
 
