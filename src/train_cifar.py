@@ -56,33 +56,39 @@ class CifarCnnModel(nn.Module):
         # TODO: enable customizing the architecture from input
 
         self.convblock1 = nn.Sequential(
-            nn.Conv2d(3, 6, 5),
+            nn.Conv2d(3, 16, 5),
             nn.ReLU(),
-            nn.Conv2d(6, 6, 5),
+            nn.Conv2d(16, 16, 5),
             nn.ReLU(),
             nn.MaxPool2d(2,2)
         )
 
         self.convblock2 = nn.Sequential(
-            nn.Conv2d(3, 6, 5),
+            nn.Conv2d(16, 16, 5),
             nn.ReLU(),
-            nn.Conv2d(6, 6, 5),
+            nn.Conv2d(16, 16, 5),
             nn.ReLU(),
             nn.MaxPool2d(2,2)
         )
 
-        self.fc1 = nn.Linear(5 * 5 * 3, 256)
-        self.fc2 = nn.Linear(256, 10)
+        self.flatten = nn.Flatten()
 
+        self.fc1 = nn.Sequential(
+            nn.Linear(2 * 2 * 16, 256),
+            nn.ReLU()
+        )
+
+        self.fc2 = nn.Linear(256, 10)
+        
 
     def forward(self, x):
 
         out = self.convblock1(x)
-        out = self.convblock2(x)
-        out = nn.ReLU(self.fc1(out))
+        out = self.convblock2(out)
+        out = self.convblock2(out)
+        out = self.flatten(out)
+        out = self.fc1(out)
         out = self.fc2(out)
-        # IS flatten needed?
-        # x = torch.flatten(x, 1) # flatten all dimensions except batch
         
         return out
 
@@ -117,11 +123,12 @@ if __name__ == "__main__":
     run['params'] = hp_config
         
     model = CifarCnnModel()
+    print(model)
     model.to(device)
     # TODO: rather than cross entropy, can directly compute classification error
     loss_fn = torch.nn.functional.cross_entropy
     
-    save_label = str(args.optimizer) + \
+    save_label = str(args.optimizer) + '_' + \
             '_'.join('{}_{}'.format(*p) for p in sorted(base_config.items())) + \
             '_'.join('{}_{}'.format(*p) for p in sorted(opt_kwargs.items())) + \
             '_'.join('{}_{}'.format(*p) for p in sorted(loss_fn_kwargs.items()))
