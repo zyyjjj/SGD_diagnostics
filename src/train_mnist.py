@@ -12,7 +12,8 @@ import pdb, time, argparse, itertools, copy
 import sys, os
 from utils.parse_hp_args import parse_hp_args
 from utils.train_nn import fit, accuracy
-from utils.nn_base import ImageClassificationBase
+from utils.learner import Learner
+from utils.callback import *
 
 # 60K
 train_ds_whole = torchvision.datasets.MNIST('/home/yz685/SGD_diagnostics/experiments/mnist',
@@ -29,7 +30,7 @@ val_size = len(train_ds_whole) - train_size
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print(device)
 
-class MnistCnnModel(ImageClassificationBase):
+class MnistCnnModel(nn.Module):
     def __init__(self):
         super().__init__()
         self.network = nn.Sequential(
@@ -58,9 +59,11 @@ class MnistCnnModel(ImageClassificationBase):
 
 if __name__ == "__main__":
 
-    args, opt_kwargs, configs_set = parse_hp_args()
-    print(opt_kwargs)
+    args, base_config, opt_kwargs, loss_fn_kwargs = parse_hp_args()
     optimizer = eval(args.optimizer)
+    hp_config = [base_config, opt_kwargs, loss_fn_kwargs]
+
+    print('Training with the following config', hp_config)
 
     seed = args.trial
     torch.manual_seed(seed)
@@ -74,56 +77,31 @@ if __name__ == "__main__":
     
     train_ds, val_ds = random_split(train_ds_whole, [train_size, val_size])
 
-    for config_pair in configs_set:
-
-        print('Training on learning rate {} and batch size {}'.format(config_pair[0], config_pair[1]))
-
-        run = neptune.init(
+    run = neptune.init(
         project="zyyjjj/SGD-diagnostics",
         api_token="eyJhcGlfYWRkcmVzcyI6Imh0dHBzOi8vYXBwLm5lcHR1bmUuYWkiLCJhcGlfdXJsIjoiaHR0cHM6Ly9hcHAubmVwdHVuZS5haSIsImFwaV9rZXkiOiIwM2RkNWY2MS01MTU1LTQxNDMtOTE3Ni1mN2RlNjY5ZTQxNWUifQ==",
         )
 
-        run["sys/tags"].add(['mnist'])  # organize things
-        run['params'] = config_pair
-
-        model = MnistCnnModel()
-        model.to(device)
-        loss_fn = torch.nn.functional.cross_entropy
-
-        lr = config_pair[0]
-        batch_size = config_pair[1]
-
-        train_loader = DataLoader(train_ds, batch_size, shuffle=True)
-        val_loader = DataLoader(val_ds, batch_size)
-
-        save_label = str(args.optimizer)+"_LR_"+str(lr)+"_" +\
-                '_'.join('{}_{}'.format(*p) for p in sorted(opt_kwargs.items()))\
-                + "_BATCH_"+str(batch_size)
-
-        prof = torch.profiler.profile(
-                schedule=torch.profiler.schedule(wait=1, warmup=1, active=10),
-                on_trace_ready=torch.profiler.tensorboard_trace_handler('./log/'+save_label),
-                profile_memory = True,
-                record_shapes=True,
-                with_stack=True)
-        prof.start()
-
-        fit(args.num_epochs, 
-            lr, 
-            model, 
-            train_ds,
-            args.aux_batch_size,
-            train_loader, 
-            val_loader, 
-            trial = args.trial,
-            loss_fn = loss_fn, 
-            opt_func = optimizer, 
-            save_label = save_label,
-            device = device,
-            run=run,
-            prof = prof,
-            opt_kwargs = opt_kwargs)
-
-
-
+    run["sys/tags"].add(['mnist'])  # organize things
+    run['params'] = hp_config
+        
+    model = MnistCnnModel()
+    print(model)
+    model.to(device)
+    # TODO: rather than cross entropy, can directly compute classification error
+    loss_fn = torch.nn.functional.cross_entropy
     
+    save_label = str(args.optimizer) + '_' + \
+            '_'.join('{}_{}'.format(*p) for p in sorted(base_config.items())) + \
+            '_'.join('{}_{}'.format(*p) for p in sorted(opt_kwargs.items())) + \
+            '_'.join('{}_{}'.format(*p) for p in sorted(loss_fn_kwargs.items()))
+
+    script_dir = os.path.abspath(os.getcwd())
+    results_folder = script_dir + "/results/" + save_label + "/" + "trial_" + str(args.trial) + "/" 
+    os.makedirs(results_folder, exist_ok=True)
+
+    callbacks = [MetricsLogger(results_folder), EarlyStopping(metric = 'val_acc', patience = 5, warmup = 20, to_minimize=False, tolerance_thresh=0.05)]
+
+    learner = Learner(model, train_ds, val_ds, optimizer, loss_fn, hp_config, callbacks, run)
+
+    learner.fit(args.num_epochs, device = device)

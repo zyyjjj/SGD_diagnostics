@@ -22,59 +22,88 @@ from botorch.fit import fit_gpytorch_model
 from gpytorch.mlls import ExactMarginalLogLikelihood
 from gpytorch.kernels.matern_kernel import MaternKernel
 from botorch.acquisition.acquisition import AcquisitionFunction
+from botorch.acquisition.analytic import ExpectedImprovement
 from botorch.acquisition.monte_carlo import qExpectedImprovement, qNoisyExpectedImprovement
 from botorch.sampling.samplers import SobolQMCNormalSampler
 
-from botorch.optim import optimize_acqf
+from botorch.optim import optimize_acqf, optimize_acqf_mixed
 from botorch.utils import standardize
 
 
 class MyMethod():
 
-    # TODO: add a function to the learner class that returns a "terminal" performance metric(s) of some sort
+    # TODO: add a function to the Learner class that returns a "terminal" performance metric(s) of some sort
 
-    def __init__(self, learner, obj_func, path, num_trials, n_initial_pts, mll_key, acqf_key, search_space): # more attributes
+    def __init__(self, Learner, obj_func, path, num_trials, n_initial_pts, acqf_key, search_space): # more attributes
         # learner: maps input (e.g., hp config) to output(s) (e.g., validation loss / acc)
         # path: where BO iteration data are saved
 
-        self.learner = learner
+        self.Learner = Learner
         self.obj_func = obj_func
         self.path = path
         self.num_trials = num_trials
         self.n_initial_pts = n_initial_pts
-        self.acqf_key = acqf_key
+        if acqf_key == 'EI':
+            self.acqf = ExpectedImprovement()
+        # TODO: enable more (+ custom) acquisition function types
+        elif acqf_key == 'KG':
+            pass
+
+        self.X = None
+        self.y = []
     
 
-    def get_initial_data(self, learner):
+    def get_initial_data(self):
         # get initial data for fitting the GP and likelihood parameters
-        pass
+        
+        # either here, or in run(), enable restarting from available saved data
 
-    def fit_model(self, initial_data):
 
-        # model_obj = FixedNoiseGP(train_x, train_obj, train_yvar.expand_as(train_obj)).to(train_x)
-        # model = ModelListGP(model_obj, model_con)
-        # mll = SumMarginalLogLikelihood(model.likelihood, model)
+        for _ in range(self.n_initial_pts):
+            # TODO: figure out how to sample hp config from search space
+            sampled_hp_config = None
+            learner = self.Learner(sampled_hp_config)
+            outcome = learner.run_fit() # this could be one or multiple values
+            self.X = np.concatenate([self.X, sampled_hp_config], axis=0)
+            self.y.append(outcome)
+        
+        
+    def fit_model(self):
+
+        model = SingleTaskGP(self.X, self.y)
+        mll = ExactMarginalLogLikelihood(model.likelihood, model)
+        # TODO: figure this out
         # load state dict if it is passed
         # if state_dict is not None:
         # model.load_state_dict(state_dict)
-        # return mll, model
+        
+        return mll, model
 
-        pass
 
     def evaluate_new_pt(self, learner, new_pt):
-        pass
-
-    def suggest_new_pt(self, acqf):
+        # something like this
+        return learner.evaluate(new_pt)
+        
+        
+    def suggest_new_pt(self):
         # given existing (X, Y), call optimize_acqf, return suggested values (And predictions?)
+
+        candidates, _ = optimize_acqf_mixed(
+            self.acqf,
+
+        )
+
+
+
         pass
 
     def run(self, MC_SAMPLES):
 
         # first get initial data: X, y
-        X, y = self.get_initial_data()
+        self.get_initial_data()
 
         # then fit an initial GP and mll using initial data
-        mll, model = self.fit_model(X, y)
+        mll, model = self.fit_model()
         best_all_trials = []
         qmc_sampler = SobolQMCNormalSampler(num_samples=MC_SAMPLES) # or something else
 
