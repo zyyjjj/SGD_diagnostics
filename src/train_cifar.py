@@ -16,6 +16,8 @@ from utils.train_nn import fit, accuracy
 from utils.learner import Learner
 from utils.callback import *
 
+# TODO: eventually move these codes to experiments / examples folder 
+
 # 60K
 transform = transforms.Compose(
     [transforms.ToTensor(),
@@ -50,34 +52,38 @@ class CifarCnnModel(nn.Module):
     """
 
 
-    def __init__(self, n_channels = 16):
+    def __init__(self, n_channels_1 = 16, n_channels_2 = 16):
+
+        super().__init__()
         
         # TODO: enable customizing the architecture from input
 
         self.convblock1 = nn.Sequential(
-            nn.Conv2d(3, n_channels, kernel_size = 3, padding = 1),
+            nn.Conv2d(3, n_channels_1, kernel_size = 3, padding = 1),
             nn.ReLU(),
-            nn.Conv2d(n_channels, n_channels, kernel_size = 3, padding = 1),
+            nn.Conv2d(n_channels_1, n_channels_1, kernel_size = 3, padding = 1),
             nn.ReLU(),
-            nn.MaxPool2d(2,2) # output is 16 * 16 * 16
+            nn.MaxPool2d(2,2) # output is n_channels_1 * 16 * 16
         )
 
         self.convblock2 = nn.Sequential(
-            nn.Conv2d(n_channels, n_channels, kernel_size = 3, padding = 1),
+            nn.Conv2d(n_channels_2, n_channels_2, kernel_size = 3, padding = 1),
             nn.ReLU(),
-            nn.Conv2d(n_channels, n_channels, kernel_size = 3, padding = 1),
+            nn.Conv2d(n_channels_2, n_channels_2, kernel_size = 3, padding = 1),
             nn.ReLU(),
-            nn.MaxPool2d(2,2) # output is 16 * 8 * 8
+            nn.MaxPool2d(2,2) # output is n_channels_2 * 8 * 8
         )
 
         self.flatten = nn.Flatten()
 
         self.fc1 = nn.Sequential(
-            nn.Linear(4 * 4 * n_channels, 256),
+            nn.Linear(4 * 4 * n_channels_2, 256),
             nn.ReLU()
         )
 
         self.fc2 = nn.Linear(256, 10)
+
+        self.softmax = nn.Softmax()
         
 
     def forward(self, x):
@@ -88,6 +94,7 @@ class CifarCnnModel(nn.Module):
         out = self.flatten(out)
         out = self.fc1(out)
         out = self.fc2(out)
+        out = self.softmax(out)
         
         return out
 
