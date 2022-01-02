@@ -83,10 +83,11 @@ class MetricsLogger(BaseCallback):
         if self.prev_grad is not None:
             norm_change_batch_grad = torch.linalg.norm(batch_grad - self.prev_grad).item()
             denoise_signal_1 = norm_batch_grad**2 - 1/2 * norm_change_batch_grad**2
-            denoise_signal_2 = denoise_signal_1 / norm_batch_grad**2
+            #denoise_signal_2 = denoise_signal_1 / norm_batch_grad**2
             cosine_sim_batch_grad = F.cosine_similarity(self.prev_grad, batch_grad, dim=0).item()
         else:
-            norm_change_batch_grad, denoise_signal_1, denoise_signal_2 = np.nan, np.nan, np.nan
+            # norm_change_batch_grad, denoise_signal_1, denoise_signal_2 = np.nan, np.nan, np.nan
+            norm_change_batch_grad, denoise_signal_1 = np.nan, np.nan
             cosine_sim_batch_grad = np.nan
 
         self.prev_grad = batch_grad
@@ -109,7 +110,7 @@ class MetricsLogger(BaseCallback):
                 'diff_sq_norm_main_aux_batch_grads': diff_sq_norm_main_aux_batch_grads,\
                 'norm_change_batch_grad': norm_change_batch_grad,\
                 'denoise_signal_1': denoise_signal_1,\
-                'denoise_signal_2': denoise_signal_2,\
+                #'denoise_signal_2': denoise_signal_2,\
                 'cosine_sim_batch_grad': cosine_sim_batch_grad,\
                 'norm_of_running_avg_of_batch_grad': norm_of_running_avg_of_batch_grad,\
                 'running_avg_of_norm_batch_grad': running_avg_of_norm_batch_grad,\
@@ -149,11 +150,14 @@ class MetricsLogger(BaseCallback):
         model_path = self.results_folder + 'model_epoch_' + str(learner.epoch) + '.pth'
         torch.save(learner.model.state_dict(), model_path)
 
-        for k in learner.logged_performance_metrics.keys():
-            learner.logged_performance_metrics[k].append(self.logged_metrics[k][-1])
+
+        # BAD PRACTICE to avoid in the future: if learner.logged_perf_metrics is only updated here,
+        # then this creates dependency between the MetricsLogger class and the EarlyStopping class
+        # for k in learner.logged_performance_metrics.keys():
+        #     learner.logged_performance_metrics[k].append(self.logged_metrics[k][-1])
         
         np.save(self.results_folder + 'logged_metrics.npy', self.logged_metrics)
-        np.save(self.results_folder + 'logged_performance_metrics.npy', learner.logged_performance_metrics)
+        # np.save(self.results_folder + 'logged_performance_metrics.npy', learner.logged_performance_metrics)
 
     
 

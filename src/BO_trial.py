@@ -15,7 +15,7 @@ sys.path.append('..')
 from utils.parse_hp_args import parse_hp_args
 from utils.train_nn import fit, accuracy
 from utils.callback import *
-from experiment_problems import problem_evaluate
+#from experiment_problems import problem_evaluate
 
 from botorch.models import SingleTaskGP, FixedNoiseGP, ModelListGP
 from botorch.fit import fit_gpytorch_model
@@ -33,23 +33,19 @@ from botorch.utils import standardize
 
 
 def BO_trial(
-        problem: Callable,
+        problem_evaluate: Callable,
         problem_name: str,
         input_dim: int,
-        active_input_indices: List[List[Optional[int]]],
+        #active_input_indices: List[List[Optional[int]]],
         algo: str,
         n_initial_pts: int,
         n_bo_iter: int,
         trial: int,
         restart: bool
         ):
-    # runs loop
 
     X = None
     y = []
-
-    # TODO: revisit the <problem> construction: make it a class, or a function?
-    # goal is to have it input hp config and output training performance
 
     if restart:
         # check if there is saved data available
@@ -72,7 +68,6 @@ def BO_trial(
     model, mll = fit_GP_model(X, y)    
 
     best_all_trials = []
-
 
     for iter in range(init_batch_id, n_bo_iter+1):
 
@@ -128,9 +123,27 @@ def suggest_new_pt(algo, X, y):
     # or optimize_acqf_mixed()
     # return new point
 
-def generate_initial_samples(n_samples, bounds):
-    # TODO: generate initial samples of hp_config
-    pass
+def generate_initial_samples(n_samples, param_ranges, seed = None):
+    # TODO: generate initial samples of hp_config, make them tensors?
+    # if you make them tensors, need to encode which dim is which hyperparam
+    
+    # TODO: seed?
+
+    initial_X = torch.Tensor()
+
+    for k, ranges in param_ranges.items():
+        if ranges[0] == 'uniform':
+            sample = torch.FloatTensor(n_samples, 1).uniform_(ranges[1][0], ranges[1][1])
+            initial_X = torch.cat((initial_X, sample))
+        elif ranges[0] == 'discrete':
+            vals = ranges[1]
+            sample = torch.Tensor(random.choices(vals, k = n_samples))
+            initial_X = torch.cat((initial_X, torch.unsqueeze(sample, 1)))
+        elif ranges[0] == 'int':
+            sample = torch.randint(ranges[1][0], ranges[1][1]+1, (n_samples, 1))
+            initial_X = torch.cat((initial_X, sample))
+    
+    return initial_X
 
 
 """
