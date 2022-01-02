@@ -19,6 +19,9 @@ def parse_hp_args():
     #parser.add_argument('-s', '--scheduling', action='store_true', help='run linear scheduling of learning rate')
     parser.add_argument('--trial', type=int, help = 'specify trial number, which also serves as random seed')
 
+    # TODO: enable passing architecture parameters of arbitrary length; later read as *kwargs when initializing the network
+
+
     args = parser.parse_args()
 
     base_config = {"lr": args.learning_rate, \

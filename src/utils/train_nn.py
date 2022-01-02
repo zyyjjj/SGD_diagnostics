@@ -181,7 +181,7 @@ def fit(num_epochs,
 
         list_training_loss.append(training_loss)
         tensor_accum_grad = torch.cat([tensor_accum_grad, accum_grad], 0)
-        tensor_model_params = torch.cat([tensor_model_params, parameters_to_vector(model.parameters()).cpu()], 0)   
+        tensor_model_params = torch.cat([tensor_model_params, parameters_to_vector(learner.model.parameters()).cpu()], 0)   
 
         # save data as you go
         for record_name in ['norm_of_batch_grad', 'norm_of_aux_batch_grad', 'norm_of_batch_grad_change', \
@@ -226,18 +226,8 @@ def fit(num_epochs,
         # IF want to save model checkpoint on Neptune:
         # run['model_checkpoints/my_model'].upload('model_checkpoints/my_model.pt')
 
-
-
         print('finished training and validating epoch {}, took {} seconds'.format(epoch, time.time()-tic_epoch_start))
 
-
-def early_stopping(metric, patience, improvement_thresh, tolerance_thresh, decrease = True):
-    # TODO: implement early stopping according to some criterion, e.g., val loss does not decrease
-
-    # if some funcion (metric[-window:], decrease) < tolerance:
-    # return True, i.e., the metric is not improving
-
-    pass
 
 
 def cross_validation(data, folds):

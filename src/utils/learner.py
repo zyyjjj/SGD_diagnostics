@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+import torch.nn as nn
 from torch.utils.data import DataLoader, random_split, Subset
 import random, time, copy, os
 
@@ -12,11 +13,14 @@ def listify(o):
     return [o]
 
 def accuracy(outputs, labels):
+
     _, preds = torch.max(outputs, dim=1)
     return torch.tensor(torch.sum(preds == labels).item() / len(preds))
 
+
+
 class Learner():
-    def __init__(self, model, train_ds, val_ds, opt, loss_fn, hp_config, callbacks, run):
+    def __init__(self, hp_config, model, train_ds, val_ds, opt, loss_fn, callbacks, run=None):
 
         self.model, self.train_ds, self.val_ds = model, train_ds, val_ds
         self.callbacks = listify(callbacks)
@@ -34,9 +38,9 @@ class Learner():
         self.current_epoch_training_time = 0
 
 
-    def fit(self, num_epochs, device):
+    # TODO: modify it so it returns the final and/or intermediate metrics when the run ends
 
-        # HERE initialize empty tensors and lists using MetricsLogger
+    def fit(self, num_epochs, device):
 
         for epoch in range(num_epochs):
 
@@ -84,6 +88,8 @@ class Learner():
             self.current_epoch_training_time = toc_epoch_end - tic_epoch_start
             self.current_training_loss /= len(self.train_loader)
 
+            self.logged_performance_metrics['training_loss'].append(self.current_training_loss)
+
             self._evoke_callback('on_train_end')
 
             self.model.eval()
@@ -108,6 +114,9 @@ class Learner():
             self.current_val_loss /= len(self.val_loader)
             self.current_val_acc /= len(self.val_loader)
 
+            self.logged_performance_metrics['val_loss'].append(self.current_val_loss)
+            self.logged_performance_metrics['val_acc'].append(self.current_val_acc)
+
             self._evoke_callback('on_val_end')
 
             # TODO: Probably don't need test set here; revisit.
@@ -118,9 +127,8 @@ class Learner():
             if self.stop == True:
                 break
 
-    # PyTorch Lightning trainer.py line 1542
-    # BIG TODO now: figure out how the *args and **kwargs are passed in
-    # Question: what about callback-specific *kwargs 
+            return self.logged_performance_metrics
+
     def _evoke_callback(self, checkpoint_name, *args, **kwargs):
         for callback in self.callbacks:
             fn = getattr(callback, checkpoint_name)

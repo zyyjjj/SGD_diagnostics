@@ -8,16 +8,16 @@ import os, sys
 
 
 def experiment_manager(
+    problem: Callable,
     problem_name: str,
+    input_dim: int,
+    param_ranges: dict,
     algo: str,
     first_trial: int, 
     last_trial: int,
-    n_init_evals: int,
+    n_initial_pts: int,
     n_bo_iter: int,
     restart: bool,
-    problem: Callable,
-    active_input_indices: List[List[Optional[int]]],
-    input_dim: int
 ) -> None:
 
     # Get script directory
@@ -30,8 +30,8 @@ def experiment_manager(
         os.makedirs(results_folder + "runtimes/")
     if not os.path.exists(results_folder + "X/"):
         os.makedirs(results_folder + "X/")
-    if not os.path.exists(results_folder + "network_output_at_X/"):
-        os.makedirs(results_folder + "network_output_at_X/")
+    #if not os.path.exists(results_folder + "network_output_at_X/"):
+    #    os.makedirs(results_folder + "network_output_at_X/")
     if not os.path.exists(results_folder + "objective_at_X/"):
         os.makedirs(results_folder + "objective_at_X/")
 
@@ -40,9 +40,9 @@ def experiment_manager(
             problem = problem,
             problem_name=problem_name,
             input_dim=input_dim,
-            active_input_indices=active_input_indices,
+            param_ranges=param_ranges,
             algo=algo,
-            n_init_evals=n_init_evals,
+            n_initial_pts=n_initial_pts,
             n_bo_iter=n_bo_iter,
             trial=trial,
             restart=restart,

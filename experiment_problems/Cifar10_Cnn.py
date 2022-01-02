@@ -23,7 +23,7 @@ transform = transforms.Compose(
     [transforms.ToTensor(),
     transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
 
-train_frac = 0.9
+train_frac = 0.7
 
 train_ds_whole = torchvision.datasets.CIFAR10('/home/yz685/SGD_diagnostics/experiments/cifar',
                                 train = True, download = True, transform = transform)
