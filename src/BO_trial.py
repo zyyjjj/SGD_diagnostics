@@ -8,10 +8,10 @@ import random
 import numpy as np
 import pdb, time, argparse, itertools, copy
 import sys, os
-sys.path.append('..')
-from utils.parse_hp_args import parse_hp_args
-from utils.train_nn import fit, accuracy
-from utils.callback import *
+sys.path.append('../')
+from .utils.parse_hp_args import parse_hp_args
+from .utils.train_nn import fit, accuracy
+from .utils.callback import *
 
 from botorch.models import SingleTaskGP, FixedNoiseGP, ModelListGP
 from botorch.fit import fit_gpytorch_model
@@ -26,7 +26,7 @@ from gpytorch.mlls import ExactMarginalLogLikelihood
 from gpytorch.kernels import ScaleKernel
 from gpytorch.priors.torch_priors import GammaPrior
 
-from models.ModifiedMaternKernel import ModifiedMaternKernel
+from .models.ModifiedMaternKernel import ModifiedMaternKernel
 
 def BO_trial(
         problem_evaluate: Callable,

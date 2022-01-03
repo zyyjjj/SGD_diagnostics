@@ -1,13 +1,16 @@
 import torch.nn as nn
-from utils.learner import Learner
 import torch
 from torch.utils.data import DataLoader, random_split
 from torch.optim import SGD, Adagrad, Adam
 import torchvision
 import torchvision.transforms as transforms
 import neptune.new as neptune
-from utils.callback import *
-import os
+import os, sys
+sys.path.append('../')
+sys.path.append('/home/yz685/SGD_diagnostics/')
+from src.utils.learner import Learner
+from src.utils.callback import *
+
 
 HPs_to_VARY = {
     'lr': ['uniform', [0.0001, 0.01]],
@@ -95,7 +98,7 @@ def problem_evaluate(X, return_metrics):
     outputs = []
     
     # TODO: think about whether we want to set the same seed as the BO trial here
-    
+
     for i in range(input_shape[0]):
         base_config = {'lr': X[i][0].item(),
             'batch_size': 2**(X[i][1].item()),
