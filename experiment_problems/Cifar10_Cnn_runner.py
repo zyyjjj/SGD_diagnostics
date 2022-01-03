@@ -1,6 +1,8 @@
 from functools import partial
 from Cifar10_Cnn import HPs_to_VARY, problem_evaluate
-from experiment_manager import experiment_manager
+import sys
+sys.path.append('..')
+from src.experiment_manager import experiment_manager
 
 # Basic skeleton for running an experiment
 
@@ -15,7 +17,7 @@ algo = 'EI'
 experiment_manager(
     problem = problem_evaluate_fixed_metrics,
     problem_name = problem_name,    
-    input_dim = 5,
+    #input_dim = 5,
     param_ranges=HPs_to_VARY,
     algo = algo,
     first_trial = 1,
@@ -23,4 +25,5 @@ experiment_manager(
     n_initial_pts = 10,
     n_bo_iter = 50,
     restart = True,
+    verbose = True
 )

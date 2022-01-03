@@ -4,9 +4,6 @@ import torch.nn.functional as F
 #import torch.profiler
 from torch.utils.data import DataLoader, random_split
 from torch.optim import SGD, Adagrad, Adam
-import torchvision
-import torchvision.transforms as transforms
-import neptune.new as neptune
 import random
 import numpy as np
 import pdb, time, argparse, itertools, copy
@@ -15,7 +12,6 @@ sys.path.append('..')
 from utils.parse_hp_args import parse_hp_args
 from utils.train_nn import fit, accuracy
 from utils.callback import *
-#from experiment_problems import problem_evaluate
 
 from botorch.models import SingleTaskGP, FixedNoiseGP, ModelListGP
 from botorch.fit import fit_gpytorch_model
@@ -27,23 +23,27 @@ from botorch.optim import optimize_acqf, optimize_acqf_mixed
 from botorch.utils import standardize
 
 from gpytorch.mlls import ExactMarginalLogLikelihood
-from gpytorch.kernels import ScaleKernel, MaternKernel
+from gpytorch.kernels import ScaleKernel
 from gpytorch.priors.torch_priors import GammaPrior
-
 
 from models.ModifiedMaternKernel import ModifiedMaternKernel
 
 def BO_trial(
         problem_evaluate: Callable,
         problem_name: str,
-        input_dim: int,
+        #input_dim: int,
         param_ranges: dict,
         algo: str,
         n_initial_pts: int,
         n_bo_iter: int,
         trial: int,
-        restart: bool
+        restart: bool,
+        verbose: bool
         ):
+
+    # Get script directory
+    script_dir = os.path.dirname(os.path.realpath(sys.argv[0]))
+    results_folder = script_dir + "/results/" + problem_name + "/" + algo + "/"
 
     X = None
     y = []
@@ -54,9 +54,14 @@ def BO_trial(
         # check if there is saved data available
         try: 
             # get saaved data
+            X = torch.tensor(np.load(results_folder + 'X/X_' + str(trial) + '.npy'))
+            y = torch.tensor(np.load(results_folder + 'objective_at_X/objective_at_X_' + str(trial) + '.npy'))
+
+            runtimes = list(np.load(results_folder + 'runtimes/runtimes_' + str(trial) + '.npy'))
+            log_best_so_far = list(np.load(results_folder + 'log_best_so_far_' + str(trial) + '.npy'))
+
+            init_batch_id = len(log_best_so_far)
             
-            # init_batch_id = len(hist_best_obs_vals)
-            pass
         except:
             # generate initial data
             # TODO: check: there probably will be tensor shape issues here
@@ -64,38 +69,36 @@ def BO_trial(
             y = problem_evaluate(X)
             init_batch_id = 1
 
-    # fit initial model
-    model, mll = fit_GP_model(X, y, is_int)    
-
-    best_all_trials = []
+    log_best_so_far = []
 
     for iter in range(init_batch_id, n_bo_iter+1):
 
-        best = np.inf # or soemthing else
-        best_log = []
-        fit_gpytorch_model(mll)
+        start_time = time.time()
 
-        # define acqf
-        if algo == 'EI':
-            acqf = ExpectedImprovement(model, best)
-
-        new_pt = suggest_new_pt(algo, X, y, bounds)
+        new_pt = suggest_new_pt(algo, X, y, bounds, is_int)
         new_y = problem_evaluate(new_pt)
+
+        # TODO: when you time a BO iteration, do you care just about the time for acqf optimization, or also include the func eval part?
+        # I think it's the latter that's more meaningful
+        runtimes.append(time.time() - start_time)
 
         X = torch.cat([X, new_pt])
         y = torch.cat([y, new_y])
 
-        # log the best-performing ones so far (including random)
-        best_log.append(new_y)
+        best_so_far = y.max().item()
 
-        # re-fit model
-        model, mll = fit_GP_model(X, y)    
+        # log the best-performing ones so far (including random)
+        log_best_so_far.append(best_so_far)
 
         # if verbose: print stuff to STDOUT
-        # also, save the newest X and y
-        # update init_batch_id to track how many iters so far
 
-    best_all_trials.append(best_log)
+        if verbose:
+            print('Finished iteration {}, best value so far is {}'.format(iter, best_so_far))
+
+        np.save(results_folder + 'X/X_' + str(trial) + '.npy', X)
+        np.save(results_folder + 'objective_at_X/objective_at_X_' + str(trial) + '.npy', y)
+        np.save(results_folder + 'runtimes/runtimes_' + str(trial) + '.npy', runtimes)
+        np.save(results_folder + 'log_best_so_far_' + str(trial) + '.npy', log_best_so_far)
 
 
 def fit_GP_model(X, y, is_int):
@@ -119,26 +122,27 @@ def fit_GP_model(X, y, is_int):
     model = SingleTaskGP(X, y, covar_module)
 
     mll = ExactMarginalLogLikelihood(model.likelihood, model)
+    fit_gpytorch_model(mll)
 
     # TODO: figure this out
         # load state dict if it is passed
         # if state_dict is not None:
         # model.load_state_dict(state_dict)
  
-    return model, mll
+    return model
 
 
-def suggest_new_pt(algo, X, y, bounds):
-    if algo == 'EI':
+def suggest_new_pt(algo, X, y, bounds, is_int, param_ranges, trial):
+
+    if algo == 'random':
+        return generate_initial_samples(1, param_ranges, seed = trial)
+
+    elif algo == 'EI':
         # fit GP model based on X, y
-        model, _ = fit_GP_model(X, y)
+        model = fit_GP_model(X, y, is_int)
         best = y.max().item()
         # define acq function
         acqf = ExpectedImprovement(model, best)
-
-    # for integer ranges, rather than fixed_features_list,
-    # maybe a better way is to treat it as a real number between 0 and 1
-    # and round to the nearest integer
 
     candidates, _ = optimize_acqf(
         acq_function = acqf,
@@ -153,11 +157,11 @@ def suggest_new_pt(algo, X, y, bounds):
 
 # This can go to utils/
 
-def generate_initial_samples(n_samples, param_ranges, seed):
+def generate_initial_samples(n_samples, param_ranges, seed=None):
 
     if seed is not None:
-        # TODO: set seed the righ way
-        pass
+
+        torch.manual_seed(seed)
 
     initial_X = torch.Tensor()
 
@@ -165,13 +169,15 @@ def generate_initial_samples(n_samples, param_ranges, seed):
         if ranges[0] == 'uniform':
             sample = torch.FloatTensor(n_samples, 1).uniform_(ranges[1][0], ranges[1][1])
             initial_X = torch.cat((initial_X, sample))
+        
+        elif ranges[0] == 'int':
+            sample = torch.randint(ranges[1][0], ranges[1][1]+1, (n_samples, 1))
+            initial_X = torch.cat((initial_X, sample))
+
         elif ranges[0] == 'discrete':
             vals = ranges[1]
             sample = torch.Tensor(random.choices(vals, k = n_samples))
             initial_X = torch.cat((initial_X, torch.unsqueeze(sample, 1)))
-        elif ranges[0] == 'int':
-            sample = torch.randint(ranges[1][0], ranges[1][1]+1, (n_samples, 1))
-            initial_X = torch.cat((initial_X, sample))
     
     return initial_X
 
@@ -182,8 +188,9 @@ def get_param_bounds(param_ranges):
     
     num_params = len(param_ranges)
     bounds = torch.empty(2, num_params)
-    fixed_features_list = []
-    # TODO: also return the is_int feature to be passed into Matern kernel
+    # fixed_features_list = []
+    
+    # also return the is_int feature to be passed into Matern kernel
     is_int = []
 
     for i, ranges in enumerate(param_ranges.values()):
@@ -224,8 +231,6 @@ def get_batch_dimensions(
         aug_batch_shape += torch.Size([num_outputs])
 
     return input_batch_shape, aug_batch_shape
-
-
 
 
 """

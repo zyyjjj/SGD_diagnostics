@@ -11,8 +11,8 @@ import os
 
 HPs_to_VARY = {
     'lr': ['uniform', [0.0001, 0.01]],
-    'batch_size': ['discrete', [32, 128, 256, 512, 1024, 2048]],
-    'aux_batch_size': ['discrete', [1024, 2048]],
+    'log2_batch_size': ['int', [5, 10]],
+    'log2_aux_batch_size': ['int', [5, 10]],
     'n_channels_1': ['int', [16, 64]],
     'n_channels_2': ['int',  [16, 64]]
 }
@@ -93,11 +93,13 @@ def problem_evaluate(X, return_metrics):
         'Input dimension 1 should match the number of hyperparameters to vary'
 
     outputs = []
-
+    
+    # TODO: think about whether we want to set the same seed as the BO trial here
+    
     for i in range(input_shape[0]):
         base_config = {'lr': X[i][0].item(),
-            'batch_size': X[i][1].item(),
-            'aux_batch_size': X[i][2].item()}        
+            'batch_size': 2**(X[i][1].item()),
+            'aux_batch_size': 2**(X[i][2].item())}        
         hp_config = [base_config, {}, {}]
 
         model = CifarCnnModel(X[i][3].item(), X[i][4].item())
