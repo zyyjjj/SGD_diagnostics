@@ -1,17 +1,10 @@
+from typing import Callable
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-#import torch.profiler
-from torch.utils.data import DataLoader, random_split
-from torch.optim import SGD, Adagrad, Adam
 import random
 import numpy as np
 import pdb, time, argparse, itertools, copy
 import sys, os
 sys.path.append('../')
-from .utils.parse_hp_args import parse_hp_args
-from .utils.train_nn import fit, accuracy
-from .utils.callback import *
 
 from botorch.models import SingleTaskGP, FixedNoiseGP, ModelListGP
 from botorch.fit import fit_gpytorch_model
@@ -49,6 +42,7 @@ def BO_trial(
     y = []
 
     bounds, is_int = get_param_bounds(param_ranges)
+    print('is_int', is_int)
 
     if restart:
         # check if there is saved data available
@@ -64,7 +58,6 @@ def BO_trial(
             
         except:
             # generate initial data
-            # TODO: check: there probably will be tensor shape issues here
             X = generate_initial_samples(n_initial_pts, param_ranges, trial)
             y = problem_evaluate(X)
             init_batch_id = 1
@@ -75,7 +68,7 @@ def BO_trial(
 
         start_time = time.time()
 
-        new_pt = suggest_new_pt(algo, X, y, bounds, is_int)
+        new_pt = suggest_new_pt(algo, X, y, bounds, is_int, param_ranges, trial)
         new_y = problem_evaluate(new_pt)
 
         # TODO: when you time a BO iteration, do you care just about the time for acqf optimization, or also include the func eval part?
@@ -103,7 +96,8 @@ def BO_trial(
 
 def fit_GP_model(X, y, is_int):
 
-    _, aug_batch_shape = get_batch_dimensions(X,y)
+    #_, aug_batch_shape = get_batch_dimensions(X,y)
+    #print(aug_batch_shape)
 
     # the modified matern kernel rounds the values for integer variables 
     # before computing the kernel output
@@ -112,14 +106,12 @@ def fit_GP_model(X, y, is_int):
             is_int,
             nu = 2.5,
             ard_num_dims = X.shape[-1],
-            batch_shape = aug_batch_shape,
             lengthscale_prior = GammaPrior(3.0, 6.0),
         ),
-        batch_shape = aug_batch_shape,
         outputscale_prior=GammaPrior(2.0, 0.15)
     )
 
-    model = SingleTaskGP(X, y, covar_module)
+    model = SingleTaskGP(X, y, covar_module = covar_module)
 
     mll = ExactMarginalLogLikelihood(model.likelihood, model)
     fit_gpytorch_model(mll)
@@ -168,16 +160,16 @@ def generate_initial_samples(n_samples, param_ranges, seed=None):
     for k, ranges in param_ranges.items():
         if ranges[0] == 'uniform':
             sample = torch.FloatTensor(n_samples, 1).uniform_(ranges[1][0], ranges[1][1])
-            initial_X = torch.cat((initial_X, sample))
+            initial_X = torch.cat((initial_X, sample), dim = 1)
         
         elif ranges[0] == 'int':
             sample = torch.randint(ranges[1][0], ranges[1][1]+1, (n_samples, 1))
-            initial_X = torch.cat((initial_X, sample))
+            initial_X = torch.cat((initial_X, sample), dim = 1)
 
         elif ranges[0] == 'discrete':
             vals = ranges[1]
             sample = torch.Tensor(random.choices(vals, k = n_samples))
-            initial_X = torch.cat((initial_X, torch.unsqueeze(sample, 1)))
+            initial_X = torch.cat((initial_X, torch.unsqueeze(sample, 1)), dim = 1)
     
     return initial_X
 
@@ -197,19 +189,17 @@ def get_param_bounds(param_ranges):
         bounds[0,i] = min(ranges[1])
         bounds[1,i] = max(ranges[1])
 
-        if ranges[1] in ['discrete', 'int']:
-            is_int.append(1)
+        if ranges[0] in ['discrete', 'int']:
+            is_int.append(True)
         else:
-            is_int.append(0)
+            is_int.append(False)
     
     return bounds, is_int
     
 
 # copied from BoTorch 
 # https://botorch.org/v/0.3.2/api/_modules/botorch/models/gpytorch.html#BatchedMultiOutputGPyTorchModel.get_batch_dimensions
-def get_batch_dimensions(
-    train_X: torch.Tensor, train_Y: torch.Tensor
-) -> Tuple[torch.Size, torch.Size]:
+def get_batch_dimensions(train_X, train_Y):
     r"""Get the raw batch shape and output-augmented batch shape of the inputs.
 
     Args:
