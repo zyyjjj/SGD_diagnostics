@@ -102,6 +102,6 @@ if __name__ == "__main__":
 
     callbacks = [MetricsLogger(results_folder), EarlyStopping(metric = 'val_acc', patience = 5, warmup = 20, to_minimize=False, tolerance_thresh=0.05)]
 
-    learner = Learner(model, train_ds, val_ds, optimizer, loss_fn, hp_config, callbacks, run)
+    learner = Learner(hp_config, model, train_ds, val_ds, optimizer, loss_fn, callbacks, run)
 
     learner.fit(args.num_epochs, device = device)

@@ -25,8 +25,8 @@ class Learner():
         self.model, self.train_ds, self.val_ds = model, train_ds, val_ds
         self.callbacks = listify(callbacks)
         self.base_config, self.opt_kwargs, self.loss_fn_kwargs = hp_config
-        self.train_loader = DataLoader(train_ds, self.base_config['batch_size'], shuffle=True)
-        self.val_loader = DataLoader(val_ds, self.base_config['batch_size'])
+        self.train_loader = DataLoader(train_ds, int(self.base_config['batch_size']), shuffle=True)
+        self.val_loader = DataLoader(val_ds, int(self.base_config['batch_size']))
         self.optimizer = opt(self.model.parameters(), self.base_config['lr'], **self.opt_kwargs)
         self.loss_fn = loss_fn
         self.run = run
@@ -36,6 +36,8 @@ class Learner():
         self.epoch = 0
         self.current_training_loss, self.current_val_loss, self.current_val_acc = 0.0, 0.0, 0.0
         self.current_epoch_training_time = 0
+
+        print('initiated learner with hp config ', hp_config)
 
 
     # TODO: modify it so it returns the final and/or intermediate metrics when the run ends
@@ -51,7 +53,7 @@ class Learner():
 
             tic_epoch_start = time.time()
 
-            aux_indices = random.sample(range(len(self.train_ds)), self.base_config['aux_batch_size'])
+            aux_indices = random.sample(range(len(self.train_ds)), int(self.base_config['aux_batch_size']))
             auxiliary_ds = Subset(self.train_ds, aux_indices) 
             aux_loader = DataLoader(auxiliary_ds, len(auxiliary_ds))
             for aux_data in aux_loader:
@@ -127,7 +129,8 @@ class Learner():
             if self.stop == True:
                 break
 
-            return self.logged_performance_metrics
+        print('end training at epoch {}'.format(self.epoch))
+        return self.logged_performance_metrics
 
     def _evoke_callback(self, checkpoint_name, *args, **kwargs):
         for callback in self.callbacks:

@@ -62,9 +62,17 @@ def BO_trial(
             y = problem_evaluate(X)
             init_batch_id = 1
 
+            np.save(results_folder + 'X/X_' + str(trial) + '.npy', X)
+            np.save(results_folder + 'objective_at_X/objective_at_X_' + str(trial) + '.npy', y)
+
+    print('loaded / generated data for {} BO iteration(s)'.format(init_batch_id))
+
     log_best_so_far = []
+    runtimes = []
 
     for iter in range(init_batch_id, n_bo_iter+1):
+
+        print('starting BO iteration ', init_batch_id)
 
         start_time = time.time()
 
@@ -82,8 +90,6 @@ def BO_trial(
 
         # log the best-performing ones so far (including random)
         log_best_so_far.append(best_so_far)
-
-        # if verbose: print stuff to STDOUT
 
         if verbose:
             print('Finished iteration {}, best value so far is {}'.format(iter, best_so_far))
@@ -125,6 +131,7 @@ def fit_GP_model(X, y, is_int):
 
 
 def suggest_new_pt(algo, X, y, bounds, is_int, param_ranges, trial):
+    print('suggesting new point')
 
     if algo == 'random':
         return generate_initial_samples(1, param_ranges, seed = trial)
@@ -135,6 +142,7 @@ def suggest_new_pt(algo, X, y, bounds, is_int, param_ranges, trial):
         best = y.max().item()
         # define acq function
         acqf = ExpectedImprovement(model, best)
+        print('use EI, fit GP, best value is {}'.format(best))
 
     candidates, _ = optimize_acqf(
         acq_function = acqf,

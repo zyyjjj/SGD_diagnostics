@@ -179,17 +179,18 @@ class EarlyStopping(BaseCallback):
 
         # TODO: add other pruning methods, e.g., median pruning
 
-        val_loss_history = learner.logged_performance_metrics[self.metric]
+        metric_history = learner.logged_performance_metrics[self.metric]
 
-        if len(val_loss_history) < self.warmup:
+        if len(metric_history) < self.warmup:
             return False
         
         if self.to_minimize:
-            if val_loss_history[-1] - val_loss_history[-(self.patience+1)] > self.tolerance_thresh:
+            if metric_history[-1] - metric_history[-(self.patience+1)] > self.tolerance_thresh:
                 print("No improvement in the last {} epochs, terminating this run.".format(self.patience) )
                 return True
         else:
-            if val_loss_history[-1] - val_loss_history[-(self.patience+1)] < -self.tolerance_thresh:
+            if metric_history[-1] - metric_history[-(self.patience+1)] < -self.tolerance_thresh:
+                print("No improvement in the last {} epochs, terminating this run.".format(self.patience) )
                 return True
         
         return False

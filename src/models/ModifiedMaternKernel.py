@@ -21,19 +21,14 @@ class ModifiedMaternKernel(MaternKernel):
 
         for i in range(x1.shape[-1]):
             if self.is_int[i]:
-                x1[:,i] = torch.round(x1[:,i])
-                x2[:,i] = torch.round(x2[:,i])
+                x1[..., i] = torch.round(x1[..., i])
+                x2[..., i] = torch.round(x2[..., i])
 
         return x1, x2
 
     def forward(self, x1, x2, **params):
         
-        print('before processing', x1, x2)
-
         x1, x2 = self.process_before_forward(x1, x2)
 
-        print('after processing', x1, x2)
-
-        super().forward(x1, x2, **params)
-
-        #print(super().forward(x1, x2, **params))
+        # Lesson learned: don't forget to add "return" when calling a method inherited from the parent class!!!
+        return super().forward(x1, x2, **params)

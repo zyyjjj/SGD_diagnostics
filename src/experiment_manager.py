@@ -3,7 +3,7 @@
 
 
 from typing import Callable
-from BO_trial import BO_trial
+from .BO_trial import BO_trial
 import os, sys
 
 
@@ -36,7 +36,7 @@ def experiment_manager(
 
     for trial in range(first_trial, last_trial + 1):
         BO_trial(
-            problem = problem,
+            problem_evaluate = problem,
             problem_name=problem_name,
             # input_dim=input_dim,
             param_ranges=param_ranges,
