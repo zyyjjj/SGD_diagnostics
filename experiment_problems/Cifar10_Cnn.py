@@ -54,21 +54,21 @@ class CifarCnnModel(nn.Module):
     def __init__(self, n_channels_1, n_channels_2):
         super().__init__()
         self.network = nn.Sequential(
-            nn.Conv2d(3, n_channels_1, kernel_size = 3, padding = 1),
+            nn.Conv2d(in_channels = 3, out_channels = n_channels_1, kernel_size = 3, padding = 1),
             nn.ReLU(),
-            nn.Conv2d(n_channels_1, n_channels_1, kernel_size = 3, padding = 1),
+            nn.Conv2d(in_channels = n_channels_1, out_channels = n_channels_1, kernel_size = 3, padding = 1),
             nn.ReLU(),
             nn.MaxPool2d(2,2), # output is n_channels_1 * 16 * 16
 
-            nn.Conv2d(n_channels_2, n_channels_2, kernel_size = 3, padding = 1),
+            nn.Conv2d(in_channels = n_channels_1, out_channels = n_channels_2, kernel_size = 3, padding = 1),
             nn.ReLU(),
-            nn.Conv2d(n_channels_2, n_channels_2, kernel_size = 3, padding = 1),
+            nn.Conv2d(in_channels = n_channels_2, out_channels = n_channels_2, kernel_size = 3, padding = 1),
             nn.ReLU(),
             nn.MaxPool2d(2,2), # output is n_channels_2 * 8 * 8
 
-            nn.Conv2d(n_channels_2, n_channels_2, kernel_size = 3, padding = 1),
+            nn.Conv2d(in_channels = n_channels_2, out_channels = n_channels_2, kernel_size = 3, padding = 1),
             nn.ReLU(),
-            nn.Conv2d(n_channels_2, n_channels_2, kernel_size = 3, padding = 1),
+            nn.Conv2d(in_channels = n_channels_2, out_channels = n_channels_2, kernel_size = 3, padding = 1),
             nn.ReLU(),
             nn.MaxPool2d(2,2), # output is n_channels_2 * 4 * 4
 
@@ -92,6 +92,8 @@ def problem_evaluate(X, return_metrics):
 
     input_shape = X.shape
 
+    #print(input_shape, len(HPs_to_VARY))
+
     assert input_shape[1] == len(HPs_to_VARY), \
         'Input dimension 1 should match the number of hyperparameters to vary'
 
@@ -105,7 +107,9 @@ def problem_evaluate(X, return_metrics):
             'aux_batch_size': 2**(X[i][2].item())}        
         hp_config = [base_config, {}, {}]
 
-        model = CifarCnnModel(X[i][3].item(), X[i][4].item())
+        print('sampled config', X[i])
+
+        model = CifarCnnModel(int(X[i][3].item()), int(X[i][4].item()))
         model.to(device)
 
         optimizer = torch.optim.Adam
@@ -118,7 +122,7 @@ def problem_evaluate(X, return_metrics):
         # run["sys/tags"].add(['cifar'])  # organize things
         # run['params'] = hp_config + [{'arch_parmas': [X[i][3].item(), X[i][4].item()]}]
             
-        loss_fn = torch.nn.functional.cross_entropy()
+        loss_fn = torch.nn.functional.cross_entropy
         callbacks = [EarlyStopping(metric = 'val_acc', patience = 5, warmup = 20, to_minimize=False, tolerance_thresh=0.05)]
 
         learner = Learner(hp_config, model, train_ds, val_ds, optimizer, loss_fn, callbacks)
