@@ -14,14 +14,20 @@ problem_evaluate_fixed_metrics = partial(problem_evaluate, return_metrics = retu
 
 algo = 'EI'
 
+if len(sys.argv) == 3:
+    first_trial = int(sys.argv[1])
+    last_trial =  int(sys.argv[2])
+elif len(sys.argv) == 2:
+    first_trial = int(sys.argv[1])
+    last_trial =  int(sys.argv[1])
+
 experiment_manager(
     problem = problem_evaluate_fixed_metrics,
     problem_name = problem_name,    
-    #input_dim = 5,
     param_ranges=HPs_to_VARY,
     algo = algo,
-    first_trial = 1,
-    last_trial = 1,
+    first_trial = first_trial,
+    last_trial = last_trial,
     n_initial_pts = 10,
     n_bo_iter = 50,
     restart = True,

@@ -40,6 +40,7 @@ def BO_trial(
 
     X = None
     y = []
+    acqf_vals = torch.Tensor().cpu()
 
     bounds, is_int = get_param_bounds(param_ranges)
     print('is_int', is_int)
@@ -70,21 +71,26 @@ def BO_trial(
     log_best_so_far = []
     runtimes = []
 
+    print('before BO start, X shape, y shape'.format(X.shape, y.shape))
+
     for iter in range(init_batch_id, n_bo_iter+1):
 
         print('starting BO iteration ', init_batch_id)
 
         start_time = time.time()
 
-        new_pt = suggest_new_pt(algo, X, y, bounds, is_int, param_ranges, trial)
+        new_pt, acqf_val = suggest_new_pt(algo, X, y, bounds, is_int, param_ranges, trial)
         new_y = problem_evaluate(new_pt)
+
+        acqf_vals = torch.cat((acqf_vals, acqf_val))
+        print('acqf vals', acqf_vals)
 
         # TODO: when you time a BO iteration, do you care just about the time for acqf optimization, or also include the func eval part?
         # I think it's the latter that's more meaningful
         runtimes.append(time.time() - start_time)
 
-        X = torch.cat([X, new_pt])
-        y = torch.cat([y, new_y])
+        X = torch.cat((X, new_pt), dim = 0)
+        y = torch.cat((y, new_y), dim = 0)
 
         best_so_far = y.max().item()
 
@@ -98,6 +104,7 @@ def BO_trial(
         np.save(results_folder + 'objective_at_X/objective_at_X_' + str(trial) + '.npy', y)
         np.save(results_folder + 'runtimes/runtimes_' + str(trial) + '.npy', runtimes)
         np.save(results_folder + 'log_best_so_far_' + str(trial) + '.npy', log_best_so_far)
+        np.save(results_folder + 'acqf_vals_' + str(trial) + '.npy', acqf_vals)
 
 
 def fit_GP_model(X, y, is_int):
@@ -144,15 +151,24 @@ def suggest_new_pt(algo, X, y, bounds, is_int, param_ranges, trial):
         acqf = ExpectedImprovement(model, best)
         print('use EI, fit GP, best value is {}'.format(best))
 
-    candidates, _ = optimize_acqf(
+    # TODO: can you just plug in a different optimizer herE??
+    candidates, acqf_val = optimize_acqf(
         acq_function = acqf,
         bounds = bounds,
         q = 1, # TODO: figure out the following three
         num_restarts = 10,
-        raw_samples = 10
+        raw_samples = 512
     )
 
-    return candidates
+
+    print('candidates', candidates, candidates.shape)
+    print('acqf_val', acqf_val, acqf_val.shape)
+
+    if len(acqf_val.size()) == 0:
+        acqf_val = acqf_val.unsqueeze(0)
+
+
+    return candidates, acqf_val
 
 
 # This can go to utils/

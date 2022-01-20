@@ -36,7 +36,7 @@ test_ds = torchvision.datasets.CIFAR10('/home/yz685/SGD_diagnostics/experiments/
 train_size = int(len(train_ds_whole) * train_frac)
 val_size = len(train_ds_whole) - train_size
 
-max_num_epochs = 300
+max_num_epochs = 100
 
 
 class CifarCnnModel(nn.Module):

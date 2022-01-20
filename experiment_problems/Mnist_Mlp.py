@@ -17,8 +17,11 @@ HPs_to_VARY = {
     'log2_batch_size': ['int', [5, 10]],
     'layer_1_size': ['int', [16, 64]],
     'layer_2_size': ['int',  [16, 64]],
-    'dropout_rate': ['uniform', [0, 0.5]]
+    'dropout_rate': ['uniform', [0, 0.5]],
+    'log2_aux_batch_size': ['int', [5, 10]]
 }
+
+# TODO: we still want aux batch size for this (this is indep of type of network)
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -34,7 +37,7 @@ test_ds = torchvision.datasets.MNIST('/home/yz685/SGD_diagnostics/experiments/mn
 
 train_size = int(len(train_ds_whole) * train_frac)  
 val_size = len(train_ds_whole) - train_size
-max_num_epochs = 300
+max_num_epochs = 100
 
 class MnistMlpModel(nn.Module):
     # A proof-of-concept experiment, using a 2-layer MLP with dropout on MNIST
@@ -78,12 +81,13 @@ def problem_evaluate(X, return_metrics):
 
     for i in range(input_shape[0]):
         base_config = {'lr': X[i][0].item(),
-            'batch_size': 2**(X[i][1].item())}
+            'batch_size': 2**(X[i][1].item()),
+            'aux_batch_size': 2**(X[i][5].item())}
         hp_config = [base_config, {}, {}]
 
         print('sampled config', X[i])
 
-        model = MnistMlpModel(int(X[i][2].item()), int(X[i][3].item()), int(X[i][4].item()))
+        model = MnistMlpModel(int(X[i][2].item()), int(X[i][3].item()), X[i][4].item())
         model.to(device)
 
         optimizer = torch.optim.Adam

@@ -41,26 +41,26 @@ class MnistCnnModel(nn.Module):
     def __init__(self, n_channels_1, n_channels_2):
         super().__init__()
         self.network = nn.Sequential(
-            nn.Conv2d(in_channels = 3, out_channels = n_channels_1, kernel_size = 3, padding = 1),
+            nn.Conv2d(in_channels = 1, out_channels = n_channels_1, kernel_size = 3, padding = 1),
             nn.ReLU(),
             nn.Conv2d(in_channels = n_channels_1, out_channels = n_channels_1, kernel_size = 3, padding = 1),
             nn.ReLU(),
-            nn.MaxPool2d(2,2), # output is n_channels_1 * 16 * 16
+            nn.MaxPool2d(2,2), # output is n_channels_1 * 14 * 14
 
             nn.Conv2d(in_channels = n_channels_1, out_channels = n_channels_2, kernel_size = 3, padding = 1),
             nn.ReLU(),
             nn.Conv2d(in_channels = n_channels_2, out_channels = n_channels_2, kernel_size = 3, padding = 1),
             nn.ReLU(),
-            nn.MaxPool2d(2,2), # output is n_channels_2 * 8 * 8
+            nn.MaxPool2d(2,2), # output is n_channels_2 * 7 * 7
 
             nn.Conv2d(in_channels = n_channels_2, out_channels = n_channels_2, kernel_size = 3, padding = 1),
             nn.ReLU(),
             nn.Conv2d(in_channels = n_channels_2, out_channels = n_channels_2, kernel_size = 3, padding = 1),
             nn.ReLU(),
-            nn.MaxPool2d(2,2), # output is n_channels_2 * 4 * 4
+            nn.MaxPool2d(2,2), # output is n_channels_2 * 3 * 3
 
             nn.Flatten(),
-            nn.Linear(4 * 4 * n_channels_2, 256),
+            nn.Linear(3 * 3 * n_channels_2, 256),
             nn.ReLU(),
             nn.Linear(256, 10),
             nn.Softmax()
