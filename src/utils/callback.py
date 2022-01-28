@@ -169,7 +169,7 @@ class EarlyStopping(BaseCallback):
         self.warmup = warmup
         self.tolerance_thresh = tolerance_thresh
         self.to_minimize = to_minimize
-        self.best_so_far = np.inf if to_minimize else -np.inf
+        #self.best_so_far = np.inf if to_minimize else -np.inf
 
 
     def do_early_stopping(self, learner):
@@ -178,22 +178,33 @@ class EarlyStopping(BaseCallback):
         # sum to something larger than {tolerance_thresh}
 
         # TODO: add other pruning methods, e.g., median pruning
+        # also think about whether the current one is good -- setting a hard threshold is not generalizable for all problems
+        # instead, use something proportional to the previous valueS? any time series analysis techniques i can use?
 
         metric_history = learner.logged_performance_metrics[self.metric]
 
         if len(metric_history) < self.warmup:
             return False
-        
+
+        # TODO: compare metric_history[-1] with best so far = min(metric_history)
         if self.to_minimize:
-            if metric_history[-1] - metric_history[-(self.patience+1)] > self.tolerance_thresh:
-                print("No improvement in the last {} epochs, terminating this run.".format(self.patience) )
-                return True
+            best_so_far = min(metric_history)
+            if metric_history[-1] > best_so_far + self.tolerance_thresh:
+                self.patience_counter += 1
+            else:
+                self.patience_counter = 0
         else:
-            if metric_history[-1] - metric_history[-(self.patience+1)] < -self.tolerance_thresh:
-                print("No improvement in the last {} epochs, terminating this run.".format(self.patience) )
-                return True
+            best_so_far = max(metric_history)
+            if metric_history[-1] < best_so_far - self.tolerance_thresh:
+                self.patience_counter += 1
+            else:
+                self.patience_counter = 0
         
-        return False
+        if self.patience_counter > self.patience:
+            print("No improvement in the last {} epochs, terminating this run at epoch {}.".format(self.patience, len(metric_history)) )
+            return True
+        else:
+            return False
 
     def on_epoch_end(self, learner):
         # if the monitored metrics got worse set a flag to stop training
