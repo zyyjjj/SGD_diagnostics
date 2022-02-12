@@ -11,7 +11,8 @@ class MultitaskGPModel(gpytorch.models.ExactGP):
         self.mean_module = gpytorch.means.MultitaskMean(
             gpytorch.means.ConstantMean(), num_tasks
         )
-        # the MultitaskKernel of GPytorch uses the product between input and task kernels
+        # the MultitaskKernel of GPytorch uses the product between input and task kernels (i.e., ICM)
+        # TODO: fully understand this; then try different kernels (LMC, ...)
         self.covar_module = gpytorch.kernels.MultitaskKernel(
             gpytorch.kernels.MaternKernel(), num_tasks, rank=2
         )
@@ -52,23 +53,19 @@ def fit_multitask_GP_model(train_x, train_y, num_tasks, training_iterations=20, 
     return model, likelihood
 
 
-def test_noisy(x,s,noise_level=0.2):
+def test_function_noisy(x,s,noise_level=0.2):
+
     output = torch.stack([
-        x/(1+x) + (1-s) * torch.sin(2*math.pi * x)/x + torch.randn(x.size()) * noise_level,
-        1+1/((1+x)**2) + (1-s) * (2*math.pi * torch.cos(2*math.pi*x)*x - torch.sin(2*math.pi*x))/(x**2) + torch.randn(x.size()) * noise_level
+        x * torch.exp(-x) * math.sqrt(s) * 10 + torch.randn(x.size()) * noise_level,
+        x * torch.exp(-x) * 10 * 1/(2*math.sqrt(s)) + torch.randn(x.size()) * noise_level
     ], -1)
 
     return output
 
-# Feb 11 TODO
-# make the test function more complicated
-# make the first component be the one we want to maximize
-# set the second component to a noisy evaluation of the gradient of the first component wrt x
-# use a GP on (x, task, single fidelity) to model the objective; try different kernels (one big, or product)
-# set cost to be higher for higher fidelities
-# forget acquisition function now, implement random search first 
-# immediate goal: does the GP recover the function structure well?
-
+def cost_at_fidelity(x,s):
+    return s
+    # can try more sophisticated ones later
+    # but cost \propto s should capture a lot of the real-world scenarios
 
 # TODO:
 # design an acquisition function, taking into consideration
@@ -78,13 +75,52 @@ def test_noisy(x,s,noise_level=0.2):
 # what are numerical methods for dealing with large scale inference? low rank approximations?
 
 
+def multitask_BO_trial(function, param_ranges, algo, n_initial_pts=10, n_bo_iter=20, **kwargs):
+    """
+    what to do in multi-task BO trial:
+    - generate initial samples at low fidelity from the test function
+    - fit parameters for multi-task GP model and likelihood
+    - sample (randomly / smartly) at new design points and fidelities, 
+    - incurring cost that's higher for higher fidelity
+    - after each sample, refit the GP and output tentative best x
+    - stop after a fixed number of iterations (for now; later can try better stopping strategies)
+    - plot:
+        - what does the resulting GP look like
+        - observed function value vs. iterations
+        - cumulative incurred cost vs. iterations
+    """
+
+    param_ranges = {'x':[0,20], 's': [0,1]}
+
+    xs = torch.FloatTensor(n_initial_pts, 1).uniform_(param_ranges['x'][0], param_ranges['x'][1])
+    ss = torch.FloatTensor(n_initial_pts, 1).uniform_(param_ranges['s'][0], param_ranges['s'][1]/2)
+    train_x_s = torch.cat((xs, ss), dim=1)
+
+    cum_cost = 0
+
+    ys = [] 
+    for i in range(n_initial_pts):
+        ys.append(function(train_x_s[i][0], train_x_s[i][1])) # TODO: convert to tensor
+        cum_cost += train_x_s[i][1]
+
+    # TODO: think about how to account for different fidelities in the fitting
+    # or just treat fidelity as another dimension of the input
+    model, likelihood = fit_multitask_GP_model(train_x_s, train_y, 2, training_iterations = 30)
+
+    for iter in range(n_bo_iter):
+        # randomly sample new point (x,s), incurring cost
+        # refit GP, record observed function value, record cost
+
+
 if __name__ == "__main__":
+    
+    fidelity = 0.5
 
     # TODO: inputs are to be replaced by hp configs
-    train_x = torch.linspace(0.1, 20, 501)
+    train_x = torch.linspace(0.1, 20, 21)
 
     # TODO: outputs are to be replaced by performance metrics
-    train_y = test_noisy(train_x,0.3,0.1)
+    train_y = test_function_noisy(train_x, s=fidelity, noise_level = 0.2)
 
     model, likelihood = fit_multitask_GP_model(train_x, train_y, 2, training_iterations = 30)
 
@@ -96,7 +132,7 @@ if __name__ == "__main__":
         predictions = likelihood(model(test_x))
         print(predictions)
         mean = predictions.mean
-        true = test_noisy(test_x,1, noise_level=0)
+        true = test_function_noisy(test_x,1, noise_level=0)
         lower, upper = predictions.confidence_region()
 
     print('shapes of train_x and train_y:', train_x.shape, train_y.shape)
@@ -108,9 +144,8 @@ if __name__ == "__main__":
     y1_ax.plot(test_x.numpy(), mean[:, 0].numpy(), 'cyan')
     # Shade in confidence
     y1_ax.fill_between(test_x.numpy(), lower[:, 0].numpy(), upper[:, 0].numpy(), alpha=0.3)
-    #y1_ax.set_ylim([-3, 3])
-    y1_ax.legend(['Observed Data', 'Noiseless', 'Mean', 'Confidence'])
-    y1_ax.set_title('Observed Values (Likelihood)')
+    y1_ax.legend(['Observed Data', 'True value at s=1', 'GP Mean at s={}'.format(fidelity), 'Confidence'])
+    y1_ax.set_title('Inferred f0')
 
     # Plot training data as black stars
     y2_ax.scatter(train_x.detach().numpy(), train_y[:, 1].detach().numpy(), color='grey', marker='*')
@@ -119,9 +154,7 @@ if __name__ == "__main__":
     y2_ax.plot(test_x.numpy(), mean[:, 1].numpy(), 'cyan')
     # Shade in confidence
     y2_ax.fill_between(test_x.numpy(), lower[:, 1].numpy(), upper[:, 1].numpy(), alpha=0.3)
-    #y2_ax.set_ylim([-3, 3])
-    y2_ax.legend(['Observed Data', 'Noiseless', 'Mean', 'Confidence'])
-    y2_ax.set_title('Observed Values (Likelihood)')
+    y2_ax.legend(['Observed Data', 'True value at s=1', 'GP Mean at s={}'.format(fidelity), 'Confidence'])
+    y2_ax.set_title('Inferred f1')
 
-    plt.show(block=True)
     plt.savefig('test.pdf')
