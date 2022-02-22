@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, random_split, Subset
 import random, time, copy, os
+from collections import defaultdict
 
 def listify(o):
     if o is None: return []
@@ -32,7 +33,7 @@ class Learner():
         self.run = run
 
         self.stop = False
-        self.logged_performance_metrics = {'training_loss': [], 'val_loss': [], 'val_acc': []}
+        self.epoch_metrics = defaultdict(list)
         self.epoch = 0
         self.current_training_loss, self.current_val_loss, self.current_val_acc = 0.0, 0.0, 0.0
         self.current_epoch_training_time = 0
@@ -90,8 +91,8 @@ class Learner():
             self.current_epoch_training_time = toc_epoch_end - tic_epoch_start
             self.current_training_loss /= len(self.train_loader)
 
-            self.logged_performance_metrics['training_loss'].append(self.current_training_loss)
-
+            self.epoch_metrics['training_loss'].append(self.current_training_loss)
+            self.epoch_metrics['training_time'].append(self.current_epoch_training_time)
             self._evoke_callback('on_train_end')
 
             self.model.eval()
@@ -116,8 +117,8 @@ class Learner():
             self.current_val_loss /= len(self.val_loader)
             self.current_val_acc /= len(self.val_loader)
 
-            self.logged_performance_metrics['val_loss'].append(self.current_val_loss)
-            self.logged_performance_metrics['val_acc'].append(self.current_val_acc)
+            self.epoch_metrics['val_loss'].append(self.current_val_loss)
+            self.epoch_metrics['val_acc'].append(self.current_val_acc)
 
             self._evoke_callback('on_val_end')
 
@@ -130,8 +131,8 @@ class Learner():
                 break
 
         print('end training at epoch {}'.format(self.epoch))
-        #return self.logged_performance_metrics
-        return self.callbacks.logged_metrics
+        return self.epoch_metrics
+
 
     def _evoke_callback(self, checkpoint_name, *args, **kwargs):
         for callback in self.callbacks:

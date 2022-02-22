@@ -5,8 +5,6 @@ from torch.nn.utils import parameters_to_vector
 import torch.nn.functional as F
 from typing import *
 import copy
-from ..deprecated.get_memory_info import get_memory_info 
-
 
 class BaseCallback():
     """
@@ -33,15 +31,16 @@ class BaseCallback():
     def on_val_batch_end(self, learner): pass
     def on_val_end(self, learner): pass
 
-class MetricsLogger(BaseCallback):
+class AuxMetricsLogger(BaseCallback):
 
-    # log useful metrics
+    # log useful *additional* metrics to the learner object
+    # (in addition to the usual performance metrics such as training loss, val loss and val acc)
     # save metrics as a dictionary of nested or unnested lists
     # nested if metric is logged on a per-batch basis; unnested if on a per-epoch basis
 
-    def __init__(self, results_folder): 
+    def __init__(self, results_folder=None): 
 
-        self.logged_metrics = defaultdict(list)
+        self.aux_epoch_metrics = defaultdict(list)
         self.results_folder = results_folder # has trial info
 
         self.prev_grad = None
@@ -51,27 +50,21 @@ class MetricsLogger(BaseCallback):
     def on_epoch_start(self, learner):  
 
         self.new_epoch = True
+        self.batch_metrics = defaultdict(list)
+
         self.epoch_accum_grad = torch.Tensor().cpu()        
     
     def on_after_backward(self, learner):
 
         signals = self.batch_gradient_signals(learner)
 
-        # append batch-wise signals to self.logged_metrics        
+        # append batch-wise signals to self.batch_metrics        
         for k, v in signals.items():
             if self.new_epoch:
-                self.logged_metrics[k].append([v])
+                self.batch_metrics[k].append([v])
             else:
-                self.logged_metrics[k][-1].append(v)
+                self.batch_metrics[k][-1].append(v)
 
-            # if k in self.logged_metrics.keys():
-            #     #print(k, self.logged_metrics[k])
-            #     if self.new_epoch:
-            #         self.logged_metrics[k].append([v])
-            #     else:
-            #         self.logged_metrics[k][-1].append(v)
-            # else:
-            #     self.logged_metrics[k] = [[v]]
         self.new_epoch = False
 
         # log to neptune
@@ -103,8 +96,6 @@ class MetricsLogger(BaseCallback):
         else:
             self.epoch_accum_grad.add_(batch_grad)
 
-        # to handle stuff with prev_gradients:
-        #prev_grads = copy.deepcopy(torch.cat((self.prev_grads, batch_grad.unsqueeze(0))))[-learner.base_config['running_avg_window_size']:, :]
         self.prev_grads = torch.cat((self.prev_grads, batch_grad.unsqueeze(0))).detach().clone()[-learner.base_config['running_avg_window_size']:, :]
         norm_of_running_avg_of_batch_grad = torch.linalg.norm(torch.mean(self.prev_grads, dim = 0)).item()
         running_avg_of_norm_batch_grad = torch.mean(torch.linalg.norm(self.prev_grads, dim=1)).item()
@@ -124,49 +115,42 @@ class MetricsLogger(BaseCallback):
                 'running_avg_of_squared_norm_batch_grad': running_avg_of_squared_norm_batch_grad,\
                 'denoise_signal_3': denoise_signal_3}
 
-    def on_train_end(self, learner):
-        
-        # for k in ['training_loss', 'training_time', 'epoch_accum_grad']:
-        #     if k not in self.logged_metrics.keys():
-        #         self.logged_metrics[k] = []       
+    # TODO: also a time-series-ish epoch signal that characterizes "d metric / d epoch" ?
 
-        self.logged_metrics['training_loss'].append(learner.current_training_loss)
-        self.logged_metrics['training_time'].append(learner.current_epoch_training_time)
+
+    def on_train_end(self, learner):    
+
         norm_epoch_accum_grad = torch.linalg.norm(self.epoch_accum_grad)
-        self.logged_metrics['epoch_accum_grad'].append(norm_epoch_accum_grad)
+        self.aux_epoch_metrics['epoch_accum_grad'].append(norm_epoch_accum_grad)
 
         learner.run['metrics/epoch/training_loss'].log(learner.current_training_loss)
         learner.run['metrics/epoch/training_time'].log(learner.current_epoch_training_time)
         learner.run['metrics/epoch/accum_grad'].log(norm_epoch_accum_grad)
 
+        # TODO: check correctness
+        # after training in the current epoch, log the average of batch metrics in this epoch
+        for k in self.batch_metrics.keys():
+            self.aux_epoch_metrics[k].append(np.mean(self.batch_metrics[k]))
+
     def on_val_end(self, learner):
 
-        # for k in ['val_loss', 'val_acc']:
-        #     if k not in self.logged_metrics.keys():
-        #         self.logged_metrics[k] = []
-
-        self.logged_metrics['val_loss'].append(learner.current_val_loss)
-        self.logged_metrics['val_acc'].append(learner.current_val_acc)
+        #self.epoch_metrics['val_loss'].append(learner.current_val_loss)
+        #self.epoch_metrics['val_acc'].append(learner.current_val_acc)
 
         learner.run['metrics/epoch/val_loss'].log(learner.current_val_loss)
         learner.run['metrics/epoch/val_acc'].log(learner.current_val_acc)
 
-
     def on_epoch_end(self, learner):
-        # save model
-        model_path = self.results_folder + 'model_epoch_' + str(learner.epoch) + '.pth'
-        torch.save(learner.model.state_dict(), model_path)
+        # save model if results_folder is specified
+        if self.results_folder is not None:
+            model_path = self.results_folder + 'model_epoch_' + str(learner.epoch) + '.pth'
+            torch.save(learner.model.state_dict(), model_path)
+            np.save(self.results_folder + 'logged_metrics.npy', self.aux_epoch_metrics)
 
-
-        # BAD PRACTICE to avoid in the future: if learner.logged_perf_metrics is only updated here,
-        # then this creates dependency between the MetricsLogger class and the EarlyStopping class
-        # for k in learner.logged_performance_metrics.keys():
-        #     learner.logged_performance_metrics[k].append(self.logged_metrics[k][-1])
-        
-        np.save(self.results_folder + 'logged_metrics.npy', self.logged_metrics)
-        # np.save(self.results_folder + 'logged_performance_metrics.npy', learner.logged_performance_metrics)
-
-    
+        # log the additional metrics to learner
+        for k in self.aux_epoch_metrics.keys():
+            if k not in learner.epoch_metrics.keys():
+                learner.epoch_metrics[k].append(self.aux_epoch_metrics[k][-1])
 
 class EarlyStopping(BaseCallback):
     def __init__(self, patience, warmup, metric = 'val_loss', tolerance_thresh = 0, to_minimize = True):
