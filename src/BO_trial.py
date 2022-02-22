@@ -4,9 +4,10 @@ import random
 import numpy as np
 import pdb, time, argparse, itertools, copy
 import sys, os
+from collections import defaultdict
 sys.path.append('../')
 
-from botorch.models import SingleTaskGP, FixedNoiseGP, ModelListGP
+from botorch.models import SingleTaskGP, FixedNoiseGP, ModelListGP, KroneckerMultiTaskGP
 from botorch.fit import fit_gpytorch_model
 from botorch.acquisition.acquisition import AcquisitionFunction
 from botorch.acquisition.analytic import ExpectedImprovement
@@ -19,7 +20,8 @@ from gpytorch.mlls import ExactMarginalLogLikelihood
 from gpytorch.kernels import ScaleKernel
 from gpytorch.priors.torch_priors import GammaPrior
 
-from .models.ModifiedMaternKernel import ModifiedMaternKernel
+from .models.kernels import ModifiedMaternKernel
+from .utils.multitask_GP import *
 
 def BO_trial(
         problem_evaluate: Callable,
@@ -71,6 +73,8 @@ def BO_trial(
     log_best_so_far = []
     runtimes = []
 
+    # TODO: make a defaultdict(list)
+
     print('before BO start, X shape, y shape'.format(X.shape, y.shape))
 
     for iter in range(init_batch_id, n_bo_iter+1):
@@ -79,14 +83,13 @@ def BO_trial(
 
         start_time = time.time()
 
+        # suggest_new_pt() calls fit_GP_model()
         new_pt, acqf_val = suggest_new_pt(algo, X, y, bounds, is_int, param_ranges, trial)
         new_y = problem_evaluate(new_pt)
 
         acqf_vals = torch.cat((acqf_vals, acqf_val))
         print('acqf vals', acqf_vals)
 
-        # TODO: when you time a BO iteration, do you care just about the time for acqf optimization, or also include the func eval part?
-        # I think it's the latter that's more meaningful
         runtimes.append(time.time() - start_time)
 
         X = torch.cat((X, new_pt), dim = 0)
@@ -107,13 +110,15 @@ def BO_trial(
         np.save(results_folder + 'acqf_vals_' + str(trial) + '.npy', acqf_vals)
 
 
-def fit_GP_model(X, y, is_int):
+def fit_GP_model(X, y, is_int, multitask = False):
 
     #_, aug_batch_shape = get_batch_dimensions(X,y)
     #print(aug_batch_shape)
 
     # the modified matern kernel rounds the values for integer variables 
     # before computing the kernel output
+    # TODO: What kind of kernel to use is something we want to revisit later [P1]
+    
     covar_module = ScaleKernel(
         ModifiedMaternKernel(
             is_int,
@@ -124,7 +129,10 @@ def fit_GP_model(X, y, is_int):
         outputscale_prior=GammaPrior(2.0, 0.15)
     )
 
-    model = SingleTaskGP(X, y, covar_module = covar_module)
+    if not multitask:
+        model = SingleTaskGP(X, y, covar_module = covar_module)
+    else:
+        model = KroneckerMultiTaskGP(X, y)
 
     mll = ExactMarginalLogLikelihood(model.likelihood, model)
     fit_gpytorch_model(mll)
@@ -133,6 +141,8 @@ def fit_GP_model(X, y, is_int):
         # load state dict if it is passed
         # if state_dict is not None:
         # model.load_state_dict(state_dict)
+
+
  
     return model
 
@@ -148,10 +158,18 @@ def suggest_new_pt(algo, X, y, bounds, is_int, param_ranges, trial):
         model = fit_GP_model(X, y, is_int)
         best = y.max().item()
         # define acq function
-        acqf = ExpectedImprovement(model, best)
+        # TODO: change to q-ExpectedImprovement
+        acqf = qExpectedImprovement(model, best)
         print('use EI, fit GP, best value is {}'.format(best))
+    
+    elif algo == 'KG':
+        # TODO: 
+        # fit a multi output GP model
+        # set acqf to be qMultiFidelityKG
+        print('use multifidelityKG, fit GP')
+        pass
 
-    # TODO: can you just plug in a different optimizer herE??
+    # TODO: can you just plug in a different optimizer herE?? work on this later
     candidates, acqf_val = optimize_acqf(
         acq_function = acqf,
         bounds = bounds,
@@ -160,13 +178,11 @@ def suggest_new_pt(algo, X, y, bounds, is_int, param_ranges, trial):
         raw_samples = 512
     )
 
-
     print('candidates', candidates, candidates.shape)
     print('acqf_val', acqf_val, acqf_val.shape)
 
     if len(acqf_val.size()) == 0:
         acqf_val = acqf_val.unsqueeze(0)
-
 
     return candidates, acqf_val
 
@@ -176,7 +192,6 @@ def suggest_new_pt(algo, X, y, bounds, is_int, param_ranges, trial):
 def generate_initial_samples(n_samples, param_ranges, seed=None):
 
     if seed is not None:
-
         torch.manual_seed(seed)
 
     initial_X = torch.Tensor()
@@ -204,7 +219,6 @@ def get_param_bounds(param_ranges):
     
     num_params = len(param_ranges)
     bounds = torch.empty(2, num_params)
-    # fixed_features_list = []
     
     # also return the is_int feature to be passed into Matern kernel
     is_int = []

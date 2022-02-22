@@ -1,8 +1,14 @@
 import torch
+from torch import Tensor
+
 from gpytorch.kernels import Kernel
 from gpytorch.kernels.matern_kernel import MaternKernel
 from botorch.models import MultiTaskGP
-
+from torch.nn import ModuleList # is this needed?
+from gpytorch.kernels.index_kernel import IndexKernel
+from gpytorch.kernels.scale_kernel import ScaleKernel
+from gpytorch.kernels.matern_kernel import MaternKernel
+from gpytorch.priors.torch_priors import GammaPrior
 class ModifiedMaternKernel(MaternKernel):
     """
     Computes a covariance matrix based on the matern Kernel,
@@ -36,7 +42,6 @@ class ModifiedMaternKernel(MaternKernel):
         return super().forward(x1, x2, **params)
 
 
-from torch.nn import ModuleList # is this needed?
 
 
 
@@ -58,7 +63,6 @@ class MisoKernel(Kernel):
 
         return covar
 
-
     def forward(self, X1, X2):
         # suppose last column is task index
 
@@ -70,3 +74,36 @@ class MisoKernel(Kernel):
         
         return covar_matrix
 
+class ProductKernel(Kernel):
+    def __init__(self, data_dim, num_tasks, **kwargs):
+        super().__init__(**kwargs)
+        self.data_kernel = ScaleKernel(
+            base_kernel=MaternKernel(
+                nu=2.5, ard_num_dims=data_dim, lengthscale_prior=GammaPrior(3.0, 6.0)
+            ),
+            outputscale_prior=GammaPrior(2.0, 0.15),
+        )
+        self.task_kernel = IndexKernel(
+            num_tasks=num_tasks
+        )
+        self.num_tasks = num_tasks
+    
+    def compute_covar(self, x1, x2):
+        # compute covariance between a pair of single data points
+        x1_data = x1[..., :-1].unsqueeze(0)
+        x2_data = x2[..., :-1].unsqueeze(0)
+        x1_task = x1[..., -1]
+        x2_task = x2[..., -1]
+        covar = self.data_kernel(x1_data, x2_data) * self.task_kernel(x1_task, x2_task)
+
+        return covar
+
+    def forward(self, X1, X2):
+        # suppose last column is task index
+        covar_matrix = Tensor(len(X1), len(X2))
+
+        for i, pt1 in enumerate(X1):
+            for j, pt2 in enumerate(X2):
+                covar_matrix[i,j] = self.compute_covar(pt1, pt2).evaluate()
+        
+        return covar_matrix

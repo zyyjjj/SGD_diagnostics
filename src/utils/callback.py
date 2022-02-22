@@ -1,10 +1,12 @@
 import numpy as np
+from collections import defaultdict
 import torch
 from torch.nn.utils import parameters_to_vector
 import torch.nn.functional as F
 from typing import *
 import copy
-from .get_memory_info import get_memory_info 
+from ..deprecated.get_memory_info import get_memory_info 
+
 
 class BaseCallback():
     """
@@ -39,7 +41,7 @@ class MetricsLogger(BaseCallback):
 
     def __init__(self, results_folder): 
 
-        self.logged_metrics = {}
+        self.logged_metrics = defaultdict(list)
         self.results_folder = results_folder # has trial info
 
         self.prev_grad = None
@@ -57,14 +59,19 @@ class MetricsLogger(BaseCallback):
 
         # append batch-wise signals to self.logged_metrics        
         for k, v in signals.items():
-            if k in self.logged_metrics.keys():
-                #print(k, self.logged_metrics[k])
-                if self.new_epoch:
-                    self.logged_metrics[k].append([v])
-                else:
-                    self.logged_metrics[k][-1].append(v)
+            if self.new_epoch:
+                self.logged_metrics[k].append([v])
             else:
-                self.logged_metrics[k] = [[v]]
+                self.logged_metrics[k][-1].append(v)
+
+            # if k in self.logged_metrics.keys():
+            #     #print(k, self.logged_metrics[k])
+            #     if self.new_epoch:
+            #         self.logged_metrics[k].append([v])
+            #     else:
+            #         self.logged_metrics[k][-1].append(v)
+            # else:
+            #     self.logged_metrics[k] = [[v]]
         self.new_epoch = False
 
         # log to neptune
@@ -119,9 +126,9 @@ class MetricsLogger(BaseCallback):
 
     def on_train_end(self, learner):
         
-        for k in ['training_loss', 'training_time', 'epoch_accum_grad']:
-            if k not in self.logged_metrics.keys():
-                self.logged_metrics[k] = []       
+        # for k in ['training_loss', 'training_time', 'epoch_accum_grad']:
+        #     if k not in self.logged_metrics.keys():
+        #         self.logged_metrics[k] = []       
 
         self.logged_metrics['training_loss'].append(learner.current_training_loss)
         self.logged_metrics['training_time'].append(learner.current_epoch_training_time)
@@ -134,9 +141,9 @@ class MetricsLogger(BaseCallback):
 
     def on_val_end(self, learner):
 
-        for k in ['val_loss', 'val_acc']:
-            if k not in self.logged_metrics.keys():
-                self.logged_metrics[k] = []
+        # for k in ['val_loss', 'val_acc']:
+        #     if k not in self.logged_metrics.keys():
+        #         self.logged_metrics[k] = []
 
         self.logged_metrics['val_loss'].append(learner.current_val_loss)
         self.logged_metrics['val_acc'].append(learner.current_val_acc)
@@ -170,23 +177,19 @@ class EarlyStopping(BaseCallback):
         self.tolerance_thresh = tolerance_thresh
         self.to_minimize = to_minimize
         #self.best_so_far = np.inf if to_minimize else -np.inf
+        self.patience_counter = 0
 
 
     def do_early_stopping(self, learner):
         # if no improvement in the last {patience} epochs, stop
-        # e.g., if minimizing, then loss(t) - loss(t-1) over last {patience} t values
-        # sum to something larger than {tolerance_thresh}
 
         # TODO: add other pruning methods, e.g., median pruning
-        # also think about whether the current one is good -- setting a hard threshold is not generalizable for all problems
-        # instead, use something proportional to the previous valueS? any time series analysis techniques i can use?
-
+        
         metric_history = learner.logged_performance_metrics[self.metric]
 
         if len(metric_history) < self.warmup:
             return False
 
-        # TODO: compare metric_history[-1] with best so far = min(metric_history)
         if self.to_minimize:
             best_so_far = min(metric_history)
             if metric_history[-1] > best_so_far + self.tolerance_thresh:
@@ -208,7 +211,6 @@ class EarlyStopping(BaseCallback):
 
     def on_epoch_end(self, learner):
         # if the monitored metrics got worse set a flag to stop training
-
         if self.do_early_stopping(learner):
             learner.stop = True
 class LRMonitor(BaseCallback):

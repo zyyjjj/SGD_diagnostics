@@ -130,7 +130,8 @@ class Learner():
                 break
 
         print('end training at epoch {}'.format(self.epoch))
-        return self.logged_performance_metrics
+        #return self.logged_performance_metrics
+        return self.callbacks.logged_metrics
 
     def _evoke_callback(self, checkpoint_name, *args, **kwargs):
         for callback in self.callbacks:
