@@ -18,12 +18,18 @@ def experiment_manager(
     n_initial_pts: int,
     n_bo_iter: int,
     restart: bool,
-    verbose: bool
+    verbose: bool,
+    is_multitask: bool,
+    use_additive_kernel: bool,
+    multifidelity_params: dict,
+    **tkwargs
 ) -> None:
 
     # Get script directory
     script_dir = os.path.dirname(os.path.realpath(sys.argv[0]))
     results_folder = script_dir + "/results/" + problem_name + "/" + algo + "/"
+
+    print('working on problem {}, is_multitask = {}'.format(problem_name, is_multitask))
 
     if not os.path.exists(results_folder) :
         os.makedirs(results_folder)
@@ -31,8 +37,8 @@ def experiment_manager(
         os.makedirs(results_folder + "runtimes/")
     if not os.path.exists(results_folder + "X/"):
         os.makedirs(results_folder + "X/")
-    if not os.path.exists(results_folder + "objective_at_X/"):
-        os.makedirs(results_folder + "objective_at_X/")
+    if not os.path.exists(results_folder + "output_at_X/"):
+        os.makedirs(results_folder + "output_at_X/")
 
     for trial in range(first_trial, last_trial + 1):
         BO_trial(
@@ -45,6 +51,9 @@ def experiment_manager(
             n_bo_iter=n_bo_iter,
             trial=trial,
             restart=restart,
-            verbose = verbose
+            verbose = verbose,
+            is_multitask = is_multitask,
+            use_additive_kernel = use_additive_kernel,
+            multifidelity_params = multifidelity_params,
+            **tkwargs
         )
-            

@@ -47,6 +47,8 @@ class AuxMetricsLogger(BaseCallback):
         self.prev_grads = torch.Tensor().cpu()
         # self.model_params = torch.Tensor().cpu() # is this necessary? maybe for regularization, or edge activation statistics
 
+        self.prev_cosine_sims = []
+
     def on_epoch_start(self, learner):  
 
         self.new_epoch = True
@@ -68,9 +70,10 @@ class AuxMetricsLogger(BaseCallback):
         self.new_epoch = False
 
         # log to neptune
-        for k, v in signals.items():
-            if not np.isnan(v):
-                learner.run['signals/batch/' + k].log(v)
+        if learner.run is not None: 
+            for k, v in signals.items():
+                if not np.isnan(v):
+                    learner.run['signals/batch/' + k].log(v)
 
     # return dictionary of additional signals
     def batch_gradient_signals(self, learner):
@@ -89,6 +92,9 @@ class AuxMetricsLogger(BaseCallback):
             # norm_change_batch_grad, denoise_signal_1, denoise_signal_2 = np.nan, np.nan, np.nan
             norm_change_batch_grad, denoise_signal_1 = np.nan, np.nan
             cosine_sim_batch_grad = np.nan
+
+        self.prev_cosine_sims.append(cosine_sim_batch_grad)
+        running_avg_of_cosine_sim = np.mean(self.prev_cosine_sims[-learner.base_config['running_avg_window_size']:])
 
         self.prev_grad = batch_grad
         if self.epoch_accum_grad.nelement() == 0:
@@ -109,23 +115,22 @@ class AuxMetricsLogger(BaseCallback):
                 'norm_change_batch_grad': norm_change_batch_grad,\
                 'denoise_signal_1': denoise_signal_1,\
                 #'denoise_signal_2': denoise_signal_2,\
-                'cosine_sim_batch_grad': cosine_sim_batch_grad,\
+                #'cosine_sim_batch_grad': cosine_sim_batch_grad,\
+                'running_avg_of_cosine_sim_batch_grad': running_avg_of_cosine_sim,\
                 'norm_of_running_avg_of_batch_grad': norm_of_running_avg_of_batch_grad,\
                 'running_avg_of_norm_batch_grad': running_avg_of_norm_batch_grad,\
                 'running_avg_of_squared_norm_batch_grad': running_avg_of_squared_norm_batch_grad,\
                 'denoise_signal_3': denoise_signal_3}
 
-    # TODO: also a time-series-ish epoch signal that characterizes "d metric / d epoch" ?
-
+    # TODO: add a time-series-ish epoch signal that characterizes "d metric / d epoch" ?
+    # TODO: compute running average of cosine similarity
 
     def on_train_end(self, learner):    
 
-        norm_epoch_accum_grad = torch.linalg.norm(self.epoch_accum_grad)
+        norm_epoch_accum_grad = torch.linalg.norm(self.epoch_accum_grad).item()
         self.aux_epoch_metrics['epoch_accum_grad'].append(norm_epoch_accum_grad)
-
-        learner.run['metrics/epoch/training_loss'].log(learner.current_training_loss)
-        learner.run['metrics/epoch/training_time'].log(learner.current_epoch_training_time)
-        learner.run['metrics/epoch/accum_grad'].log(norm_epoch_accum_grad)
+        if learner.run is not None:
+            learner.run['metrics/epoch/accum_grad'].log(norm_epoch_accum_grad)
 
         # TODO: check correctness
         # after training in the current epoch, log the average of batch metrics in this epoch
@@ -137,8 +142,12 @@ class AuxMetricsLogger(BaseCallback):
         #self.epoch_metrics['val_loss'].append(learner.current_val_loss)
         #self.epoch_metrics['val_acc'].append(learner.current_val_acc)
 
-        learner.run['metrics/epoch/val_loss'].log(learner.current_val_loss)
-        learner.run['metrics/epoch/val_acc'].log(learner.current_val_acc)
+        if learner.run is not None:
+            learner.run['metrics/epoch/val_loss'].log(learner.current_val_loss)
+            learner.run['metrics/epoch/val_acc'].log(learner.current_val_acc)
+            learner.run['metrics/epoch/training_loss'].log(learner.current_training_loss)
+            learner.run['metrics/epoch/training_time'].log(learner.current_epoch_training_time)
+
 
     def on_epoch_end(self, learner):
         # save model if results_folder is specified
@@ -149,8 +158,7 @@ class AuxMetricsLogger(BaseCallback):
 
         # log the additional metrics to learner
         for k in self.aux_epoch_metrics.keys():
-            if k not in learner.epoch_metrics.keys():
-                learner.epoch_metrics[k].append(self.aux_epoch_metrics[k][-1])
+            learner.epoch_metrics[k].append(self.aux_epoch_metrics[k][-1])
 
 class EarlyStopping(BaseCallback):
     def __init__(self, patience, warmup, metric = 'val_loss', tolerance_thresh = 0, to_minimize = True):
@@ -169,7 +177,7 @@ class EarlyStopping(BaseCallback):
 
         # TODO: add other pruning methods, e.g., median pruning
         
-        metric_history = learner.logged_performance_metrics[self.metric]
+        metric_history = learner.epoch_metrics[self.metric]
 
         if len(metric_history) < self.warmup:
             return False
@@ -196,7 +204,9 @@ class EarlyStopping(BaseCallback):
     def on_epoch_end(self, learner):
         # if the monitored metrics got worse set a flag to stop training
         if self.do_early_stopping(learner):
+            print('stop training early')
             learner.stop = True
+
 class LRMonitor(BaseCallback):
     pass
 

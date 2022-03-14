@@ -18,8 +18,6 @@ def accuracy(outputs, labels):
     _, preds = torch.max(outputs, dim=1)
     return torch.tensor(torch.sum(preds == labels).item() / len(preds))
 
-
-
 class Learner():
     def __init__(self, hp_config, model, train_ds, val_ds, opt, loss_fn, callbacks, run=None):
 
@@ -39,9 +37,7 @@ class Learner():
         self.current_epoch_training_time = 0
 
         print('initiated learner with hp config ', hp_config)
-
-
-    # TODO: modify it so it returns the final and/or intermediate metrics when the run ends
+        print('training data size: {}, validation data size: {}'.format(len(train_ds), len(val_ds)))
 
     def fit(self, num_epochs, device):
 
@@ -54,7 +50,10 @@ class Learner():
 
             tic_epoch_start = time.time()
 
-            aux_indices = random.sample(range(len(self.train_ds)), int(self.base_config['aux_batch_size']))
+            aux_indices = random.sample(
+                range(len(self.train_ds)), 
+                min(int(self.base_config['aux_batch_size']), len(self.train_ds))
+            )
             auxiliary_ds = Subset(self.train_ds, aux_indices) 
             aux_loader = DataLoader(auxiliary_ds, len(auxiliary_ds))
             for aux_data in aux_loader:
@@ -118,7 +117,7 @@ class Learner():
             self.current_val_acc /= len(self.val_loader)
 
             self.epoch_metrics['val_loss'].append(self.current_val_loss)
-            self.epoch_metrics['val_acc'].append(self.current_val_acc)
+            self.epoch_metrics['val_acc'].append(self.current_val_acc.item())
 
             self._evoke_callback('on_val_end')
 
@@ -130,7 +129,14 @@ class Learner():
             if self.stop == True:
                 break
 
+            #print('epoch {} ended, metrics {}'.format(self.epoch, self.epoch_metrics))
+
         print('end training at epoch {}'.format(self.epoch))
+
+        earlier_epoch = max(0, self.epoch - 10)
+        self.epoch_metrics['val_acc_improvement'] = [self.epoch_metrics['val_acc'][-1] - self.epoch_metrics['val_acc'][earlier_epoch]]
+        self.epoch_metrics['val_loss_improvement'] = [self.epoch_metrics['val_loss'][-1] - self.epoch_metrics['val_loss'][earlier_epoch]]
+
         return self.epoch_metrics
 
 

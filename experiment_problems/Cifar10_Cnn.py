@@ -6,6 +6,7 @@ import torchvision
 import torchvision.transforms as transforms
 import neptune.new as neptune
 import os, sys
+
 sys.path.append('../')
 sys.path.append('/home/yz685/SGD_diagnostics/')
 from src.utils.learner import Learner
@@ -13,21 +14,31 @@ from src.utils.callback import *
 
 
 HPs_to_VARY = {
-    'lr': ['uniform', [0.0001, 0.01]],
+    'lr': ['uniform', [0.00001, 0.1]],
     'log2_batch_size': ['int', [5, 10]],
     'log2_aux_batch_size': ['int', [5, 10]],
-    'n_channels_1': ['int', [16, 64]],
-    'n_channels_2': ['int',  [16, 64]]
+    'n_channels_1': ['int', [32, 512]],
+    'n_channels_2': ['int',  [32, 512]],
+    'iteration_fidelity': ['uniform', [0.25, 1]]
+}
+
+MultiFidelity_PARAMS = {
+    "fidelity_dim": 5,
+    "target_fidelities": {5: 1.0, 6: 0},
+    "fidelity_weights": {5: 1},
+    "fixed_cost": 1
 }
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 transform = transforms.Compose(
     [transforms.ToTensor(),
-    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+    transforms.RandomHorizontalFlip(0.4),
+    transforms.RandomAffine(0, translate  = (0.25, 0.25))
+    ])
 
 train_frac = 0.7
-
 train_ds_whole = torchvision.datasets.CIFAR10('/home/yz685/SGD_diagnostics/experiments/cifar',
                                 train = True, download = True, transform = transform)
 test_ds = torchvision.datasets.CIFAR10('/home/yz685/SGD_diagnostics/experiments/cifar',
@@ -36,7 +47,7 @@ test_ds = torchvision.datasets.CIFAR10('/home/yz685/SGD_diagnostics/experiments/
 train_size = int(len(train_ds_whole) * train_frac)
 val_size = len(train_ds_whole) - train_size
 
-max_num_epochs = 100
+max_num_epochs = 50
 
 
 class CifarCnnModel(nn.Module):
@@ -82,7 +93,7 @@ class CifarCnnModel(nn.Module):
     def forward(self, x):
         return self.network(x)
 
-def problem_evaluate(X, return_metrics):
+def problem_evaluate(X, return_metrics, designs = HPs_to_VARY):
     """
     X is a tensor of size (num_trials, num_hps_to_vary)
     return_metrics is a dictionary {'metric_name': 'return_type'}
@@ -97,14 +108,16 @@ def problem_evaluate(X, return_metrics):
     assert input_shape[1] == len(HPs_to_VARY), \
         'Input dimension 1 should match the number of hyperparameters to vary'
 
-    outputs = []
+    outputs = [] # make this multi-output
     
     # TODO: think about whether we want to set the same seed as the BO trial here
 
     for i in range(input_shape[0]):
+
         base_config = {'lr': X[i][0].item(),
             'batch_size': 2**(X[i][1].item()),
-            'aux_batch_size': 2**(X[i][2].item())}        
+            'aux_batch_size': 2**(X[i][2].item()),
+            'running_avg_window_size': 10}        
         hp_config = [base_config, {}, {}]
 
         print('sampled config', X[i])
@@ -119,14 +132,25 @@ def problem_evaluate(X, return_metrics):
         #     project="zyyjjj/SGD-diagnostics",
         #     api_token="eyJhcGlfYWRkcmVzcyI6Imh0dHBzOi8vYXBwLm5lcHR1bmUuYWkiLCJhcGlfdXJsIjoiaHR0cHM6Ly9hcHAubmVwdHVuZS5haSIsImFwaV9rZXkiOiIwM2RkNWY2MS01MTU1LTQxNDMtOTE3Ni1mN2RlNjY5ZTQxNWUifQ==",
         #     )
-        # run["sys/tags"].add(['cifar'])  # organize things
+        # run["sys/tags"].add(['cifar_BO'])  # organize things
         # run['params'] = hp_config + [{'arch_parmas': [X[i][3].item(), X[i][4].item()]}]
             
         loss_fn = torch.nn.functional.cross_entropy
-        callbacks = [EarlyStopping(metric = 'val_acc', patience = 5, warmup = 20, to_minimize=False, tolerance_thresh=0.05)]
+        callbacks = [
+            #EarlyStopping(metric = 'val_acc', patience = 5, warmup = 20, to_minimize=False, tolerance_thresh=0.05),
+            AuxMetricsLogger()
+        ]
 
         learner = Learner(hp_config, model, train_ds, val_ds, optimizer, loss_fn, callbacks)
-        logged_performance_metrics = learner.fit(max_num_epochs, device = device)
+        
+        if 'iteration_fidelity' in designs:
+            num_epochs = int(X[i][5] * max_num_epochs)
+        else:
+            num_epochs = max_num_epochs
+        
+        print('plan to train for {} epochs'.format(num_epochs))
+
+        logged_performance_metrics = learner.fit(num_epochs, device = device)
 
         output = []
         for k,t in return_metrics.items():
