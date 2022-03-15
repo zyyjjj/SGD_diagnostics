@@ -105,6 +105,7 @@ def BO_trial(
     else:
         # generate initial data
         X = generate_initial_samples(n_initial_pts, param_ranges, trial)
+        print(X)
         y = problem_evaluate(X)
         init_batch_id = 1
 
@@ -141,13 +142,11 @@ def BO_trial(
         start_time = time.time()
 
         # suggest_new_pt() calls fit_GP_model()
-        # pdb.set_trace()
         new_pt, acqf_val = optimize_acqf_and_suggest_new_pt(
             algo, X, y, objective, bounds, param_ranges, trial, is_multitask, use_additive_kernel, is_int, 
             cost_aware_utility, project, fidelity_dim, num_outputs)
         # this should suggest a task-agnostic point (input, fidelity) since we observe all tasks
 
-        # pdb.set_trace()
         new_y = problem_evaluate(new_pt)
 
         if is_multitask:
@@ -162,12 +161,11 @@ def BO_trial(
 
         X = torch.cat((X, new_pt), dim = 0)
         y = torch.cat((y, new_y), dim = 0)
-        print('shape of X and y after concatenation: ', X.shape, y.shape)
+        print('shape of X and y after concatenating new data point: ', X.shape, y.shape)
 
         if not is_multitask:
             log_best_so_far = y.cummax(0).values
         else:
-            # log_best_so_far = objective(y).cummax(0).values
             log_best_so_far = y[::num_outputs].cummax(0).values
 
             
@@ -185,6 +183,7 @@ def BO_trial(
         if is_multitask:
             title += ' (multitask)'
 
+        # TODO: make the horizontal axis be the cumulative fidelities so far
         plot_progress({title: log_best_so_far}, results_folder, trial)
 
 def fit_GP_model(X, y, is_multitask, use_additive_kernel, is_int=None, num_outputs = None):
@@ -193,13 +192,15 @@ def fit_GP_model(X, y, is_multitask, use_additive_kernel, is_int=None, num_outpu
     # before computing the kernel output
     # TODO: What kind of kernel to use is something we want to revisit later [P1]
 
+    pdb.set_trace()
+
     if not is_multitask:
         if use_additive_kernel:
             covar_module = MaternKernel(active_dims = torch.arange(0, X.shape[-1]-1)) + \
-                         ExponentialDecayKernel(active_dims = torch.tensor([X.shape[-1]]))
+                         ExponentialDecayKernel(active_dims = torch.tensor([X.shape[-1]-1]))
         else:
             covar_module = MaternKernel(active_dims = torch.arange(0, X.shape[-1]-1)) * \
-                         ExponentialDecayKernel(active_dims = torch.tensor([X.shape[-1]]))
+                         ExponentialDecayKernel(active_dims = torch.tensor([X.shape[-1]-1]))
         
         model = SingleTaskGP(X, y, covar_module=covar_module)
 
@@ -282,13 +283,10 @@ def optimize_acqf_and_suggest_new_pt(
 
         # fit a multi output GP model
         model = fit_GP_model(X, y, is_multitask, use_additive_kernel, is_int, num_outputs)
+        # TODO: can I output the task and fidelity kernels here?
         
-        # set acqf to be qMultiFidelityKG
-        # pdb.set_trace()
         acqf = get_mfkg(model, objective, bounds, cost_aware_utility, project, fidelity_dim, is_multitask)
-        print('use multifidelityKG, fit GP')
-
-        # pdb.set_trace()
+        
         X_init = gen_one_shot_kg_initial_conditions(
             acq_function = acqf,
             bounds=bounds,
@@ -315,13 +313,10 @@ def optimize_acqf_and_suggest_new_pt(
         if is_int[i]:
             candidates[..., i] = torch.round(candidates[..., i])
 
-    print('candidates', candidates, candidates.shape)
-    print('acqf_val', acqf_val, acqf_val.shape)
+    print('optimize MultiFidelityKG, get candidates ', candidates, ', acqf_val ', acqf_val)
 
     return candidates, acqf_val
 
-
-# This can go to utils/
 
 def generate_initial_samples(n_samples, param_ranges, seed=None):
 
@@ -332,9 +327,9 @@ def generate_initial_samples(n_samples, param_ranges, seed=None):
 
     for k, ranges in param_ranges.items():
 
-        if k == 'iteration_fidelity':
-            initial_X = torch.cat((initial_X, torch.ones(n_samples, 1)), dim = 1)
-            continue
+        #if k == 'iteration_fidelity':
+        #    initial_X = torch.cat((initial_X, torch.ones(n_samples, 1)), dim = 1)
+        #    continue
 
         if ranges[0] == 'uniform':
             sample = torch.FloatTensor(n_samples, 1).uniform_(ranges[1][0], ranges[1][1])
@@ -350,8 +345,6 @@ def generate_initial_samples(n_samples, param_ranges, seed=None):
             initial_X = torch.cat((initial_X, torch.unsqueeze(sample, 1)), dim = 1)
     
     return initial_X
-
-# This can also go to utils
 
 def get_param_bounds(param_ranges):
     
@@ -373,32 +366,7 @@ def get_param_bounds(param_ranges):
     return bounds.float(), is_int
     
 
-# copied from BoTorch 
-# https://botorch.org/v/0.3.2/api/_modules/botorch/models/gpytorch.html#BatchedMultiOutputGPyTorchModel.get_batch_dimensions
-def get_batch_dimensions(train_X, train_Y):
-    r"""Get the raw batch shape and output-augmented batch shape of the inputs.
-
-    Args:
-        train_X: A `n x d` or `batch_shape x n x d` (batch mode) tensor of training
-            features.
-        train_Y: A `n x m` or `batch_shape x n x m` (batch mode) tensor of
-            training observations.
-
-    Returns:
-        2-element tuple containing
-
-        - The `input_batch_shape`
-        - The output-augmented batch shape: `input_batch_shape x (m)`
-    """
-    input_batch_shape = train_X.shape[:-2]
-    aug_batch_shape = input_batch_shape
-    num_outputs = train_Y.shape[-1]
-    if num_outputs > 1:
-        aug_batch_shape += torch.Size([num_outputs])
-
-    return input_batch_shape, aug_batch_shape
-
-
+# TODO: make the x-axis represent the cumulative fidelities sampled so far
 def plot_progress(metric, results_folder, trial):
     # metrics: dictionary of {metric_name: list of metric values}
 
@@ -469,7 +437,6 @@ def process_multitask_data(X,y, add_last_col_X = False):
         new_X = torch.cat((X_repeat, task_idx_repeat), 1)
     else:
         # X shape: num_trials x (design_dim + 2), but the last column is a dummy task column, not meaningful
-        # TODO: this is wrong for single task logging -- repeats task_idx = 0 and replaces the sampled fidelity column!! 
         new_X = torch.cat((X_repeat[:, :-1], task_idx_repeat), 1)
     
     print('expanded X', new_X)

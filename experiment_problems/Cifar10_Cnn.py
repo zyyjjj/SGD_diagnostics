@@ -38,7 +38,7 @@ transform = transforms.Compose(
     transforms.RandomAffine(0, translate  = (0.25, 0.25))
     ])
 
-train_frac = 0.7
+train_frac = 0.8
 train_ds_whole = torchvision.datasets.CIFAR10('/home/yz685/SGD_diagnostics/experiments/cifar',
                                 train = True, download = True, transform = transform)
 test_ds = torchvision.datasets.CIFAR10('/home/yz685/SGD_diagnostics/experiments/cifar',
