@@ -30,7 +30,7 @@ experiment_manager(
     first_trial = first_trial,
     last_trial = last_trial,
     n_initial_pts = 5,
-    n_bo_iter = 50,
+    n_bo_iter = 20,
     restart = False,
     verbose = True,
     is_multitask = is_multitask,

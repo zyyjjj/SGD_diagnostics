@@ -11,7 +11,7 @@ Input_RANGES = {
 MultiFidelity_PARAMS = {
     "fidelity_dim": 1,
     "target_fidelities": {1: 1.0},
-    "fidelity_weights": {1: 100},
+    "fidelity_weights": {1: 1},
     "fixed_cost": 0
 }
 
@@ -22,13 +22,14 @@ def problem_evaluate(X, is_multitask):
     input_shape = X.shape
     outputs = []
     max_iters = 20
-    y=5
 
     for i in range(input_shape[0]):
-        x = X[i][0]
-        s = X[i][1]
+        x = X[i][0].item()
+        s = X[i][1].item()
+        y = 10 - (x-3)**2
 
-        n_iters = int(max_iters * s)
+        n_iters = round(max_iters * s)
+        # n_iters = int(max_iters * s)
 
         if n_iters < max_iters:
             task_0 = torch.randn(1)

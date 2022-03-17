@@ -59,15 +59,22 @@ def BO_trial(
     X = None
     y = []
     acqf_vals = torch.Tensor().cpu()
+    sampled_fidelities = []
 
     if multifidelity_params is not None:
         cost_model = AffineFidelityCostModel(
             fidelity_weights = multifidelity_params['fidelity_weights'], 
             fixed_cost = multifidelity_params['fixed_cost'])
         cost_aware_utility = InverseCostWeightedUtility(cost_model=cost_model)
-        def project(X):
-            return project_to_target_fidelity(X=X, target_fidelities=multifidelity_params['target_fidelities'])
         fidelity_dim = multifidelity_params['fidelity_dim']
+        target_fidelities = multifidelity_params['target_fidelities']
+        if not is_multitask:
+            def project(X):
+                return project_to_target_fidelity(X=X, target_fidelities=target_fidelities)
+        else:
+            target_fidelities[fidelity_dim+1] = 0 # define the target fidelity for task to be 0 (main task)
+            def project(X):
+                return project_to_target_fidelity(X=X, target_fidelities=target_fidelities)
     else:
         cost_model = AffineFidelityCostModel(fidelity_weights = {-1: 0}, fixed_cost = 1) # uniform cost 1 for all inputs
         cost_aware_utility = None
@@ -100,7 +107,7 @@ def BO_trial(
 
             log_best_so_far = []
             runtimes = []
-            cum_costs = [cost_model(X).sum()] # evaluate cost of sampling initial X
+            cum_costs = [cost_model(X).sum().item()] # evaluate cost of sampling initial X
 
     else:
         # generate initial data
@@ -114,17 +121,22 @@ def BO_trial(
 
         log_best_so_far = []
         runtimes = []
-        cum_costs = [cost_model(X).sum()] # evaluate cost of sampling initial X
+        cum_costs = [cost_model(X).sum().item()] # evaluate cost of sampling initial X
         
     print('loaded / generated data for {} BO iteration(s)'.format(init_batch_id))
     print('initial samples X and y: ', X, y)
     print('before BO start, X shape, y shape'.format(X.shape, y.shape))
+
 
     num_outputs = y.shape[-1]
     # if multi-output, process X and y to add task dimension to X
     if is_multitask:
         param_ranges['task_idx'] = ['int', [0, num_outputs]]
         X, y = process_multitask_data(X, y, add_last_col_X = True)
+    
+        max_posterior_mean = [y[::num_outputs].max().item()]
+    else:
+        max_posterior_mean = [y.max().item()]
 
     bounds, is_int = get_param_bounds(param_ranges)
     print('bounds', bounds)
@@ -142,12 +154,16 @@ def BO_trial(
         start_time = time.time()
 
         # suggest_new_pt() calls fit_GP_model()
-        new_pt, acqf_val = optimize_acqf_and_suggest_new_pt(
+        new_pt, acqf_val, current_max_posterior_mean = optimize_acqf_and_suggest_new_pt(
             algo, X, y, objective, bounds, param_ranges, trial, is_multitask, use_additive_kernel, is_int, 
             cost_aware_utility, project, fidelity_dim, num_outputs)
         # this should suggest a task-agnostic point (input, fidelity) since we observe all tasks
 
+        max_posterior_mean.append(current_max_posterior_mean)
+
         new_y = problem_evaluate(new_pt)
+
+        sampled_fidelities.append(new_pt[0][fidelity_dim].item())
 
         if is_multitask:
             new_pt, new_y = process_multitask_data(new_pt, new_y)
@@ -155,7 +171,9 @@ def BO_trial(
         acqf_vals = torch.cat((acqf_vals, acqf_val))
 
         if cost_model is not None:
-            cum_costs.append(cost_model(new_pt).sum())
+            cum_costs.append(cum_costs[-1] + cost_model(new_pt)[0].item())
+        
+        print('cumulative cost', cum_costs)
 
         runtimes.append(time.time() - start_time)
 
@@ -164,10 +182,12 @@ def BO_trial(
         print('shape of X and y after concatenating new data point: ', X.shape, y.shape)
 
         if not is_multitask:
-            log_best_so_far = y.cummax(0).values
+            log_best_so_far = y.cummax(0).values[n_initial_pts-1:]
         else:
-            log_best_so_far = y[::num_outputs].cummax(0).values
-
+            log_best_so_far = y[::num_outputs].cummax(0).values[n_initial_pts-1:]
+        
+        #print('length of log_best_so_far', len(log_best_so_far))
+        #print('length of cum_cost', len(cum_costs))
             
         if verbose:
             print('Finished iteration {}, best value so far is {}'.format(iter, log_best_so_far[-1].item()))
@@ -183,8 +203,9 @@ def BO_trial(
         if is_multitask:
             title += ' (multitask)'
 
-        # TODO: make the horizontal axis be the cumulative fidelities so far
-        plot_progress({title: log_best_so_far}, results_folder, trial)
+        plot_progress([title, log_best_so_far], cum_costs, results_folder, trial, max_posterior_mean = max_posterior_mean)
+        plot_acqf_vals_and_fidelities(acqf_vals, sampled_fidelities, results_folder, trial)
+
 
 def fit_GP_model(X, y, is_multitask, use_additive_kernel, is_int=None, num_outputs = None):
 
@@ -192,7 +213,7 @@ def fit_GP_model(X, y, is_multitask, use_additive_kernel, is_int=None, num_outpu
     # before computing the kernel output
     # TODO: What kind of kernel to use is something we want to revisit later [P1]
 
-    pdb.set_trace()
+    # pdb.set_trace()
 
     if not is_multitask:
         if use_additive_kernel:
@@ -228,7 +249,7 @@ def fit_GP_model(X, y, is_multitask, use_additive_kernel, is_int=None, num_outpu
     mll = ExactMarginalLogLikelihood(model.likelihood, model)
     fit_gpytorch_model(mll)
 
-    # TODO: figure this out
+    # TODO: saving (design, fidelity) is likely required for freeze-thaw
         # load state dict if it is passed
         # if state_dict is not None:
         # model.load_state_dict(state_dict)
@@ -284,12 +305,25 @@ def optimize_acqf_and_suggest_new_pt(
         # fit a multi output GP model
         model = fit_GP_model(X, y, is_multitask, use_additive_kernel, is_int, num_outputs)
         # TODO: can I output the task and fidelity kernels here?
-        
+        print('task covariance matrix', get_task_covariance(model, X, num_outputs))
+
         acqf = get_mfkg(model, objective, bounds, cost_aware_utility, project, fidelity_dim, is_multitask)
         
+        current_max_posterior_mean = acqf.current_value
+
+        if is_multitask:
+            fixed_features = {fidelity_dim + 1: 0} # fixed task to be 0
+            print('fix task feature to be 0 before calling optimize_acqf()')
+            _bounds = bounds[:,:-1]
+        else:
+            fixed_features = None
+            _bounds = bounds
+        
+
         X_init = gen_one_shot_kg_initial_conditions(
             acq_function = acqf,
             bounds=bounds,
+            fixed_features = fixed_features,
             q=1,
             num_restarts=10,
             raw_samples=512,
@@ -297,10 +331,11 @@ def optimize_acqf_and_suggest_new_pt(
 
         candidates, acqf_val = optimize_acqf(
             acq_function = acqf,
-            bounds=bounds,
-            q=1,
+            bounds=_bounds,
+            q=1, # TODO: change back to 1
             num_restarts=10,
             raw_samples=512,
+            fixed_features = fixed_features,
             batch_initial_conditions=X_init,
             options={"batch_limit": 5, "maxiter": 200},
         )
@@ -315,7 +350,7 @@ def optimize_acqf_and_suggest_new_pt(
 
     print('optimize MultiFidelityKG, get candidates ', candidates, ', acqf_val ', acqf_val)
 
-    return candidates, acqf_val
+    return candidates, acqf_val, current_max_posterior_mean
 
 
 def generate_initial_samples(n_samples, param_ranges, seed=None):
@@ -366,14 +401,47 @@ def get_param_bounds(param_ranges):
     return bounds.float(), is_int
     
 
-# TODO: make the x-axis represent the cumulative fidelities sampled so far
-def plot_progress(metric, results_folder, trial):
+def plot_progress(metric, cum_costs, results_folder, trial, max_posterior_mean = None):
     # metrics: dictionary of {metric_name: list of metric values}
 
-    for k,v in metric.items():
-        plt.plot(v)
-        plt.title(k)
-        plt.savefig(results_folder + 'visualization_trial_' + str(trial))
+    k, v = metric
+    fig, ax1 = plt.subplots()
+
+    a1, = ax1.plot(cum_costs, v, color = 'g', label = 'best objective')
+    ax1.set_xlabel('resources consumed')
+    ax1.set_ylabel('best objective value achieved')
+
+    if max_posterior_mean is not None:
+        ax2 = ax1.twinx()
+        a2, = ax2.plot(cum_costs, max_posterior_mean, color = 'm', label = 'max posterior mean')
+        ax2.set_ylabel('maximum posterior mean')
+    
+    plt.title(k + '\n final objective value achieved: {:.2f}, resources consumed: {:.2f}'.format(v[-1].item(), cum_costs[-1]))
+    p = [a1, a2]
+    ax1.legend(p, [p_.get_label() for p_ in p], loc= 'upper left')
+
+    fig.savefig(results_folder + 'visualization_trial_' + str(trial))
+
+
+def plot_acqf_vals_and_fidelities(acqf_vals, sampled_fidelites, results_folder, trial):
+
+
+    fig, ax1 = plt.subplots()
+
+    a1, = ax1.plot(acqf_vals.numpy(), color = 'g', label = 'acquisition function value')
+    ax1.set_xlabel('Iterations of BO')
+    ax1.set_ylabel('Acquisition function value')
+    ax1.axhline(c = 'grey', linestyle = '--')
+    
+    ax2 = ax1.twinx()
+    a2, = ax2.plot(sampled_fidelites, color = 'm', label = 'sampled fidelities')
+    ax2.set_ylabel('sampled fidelities')
+
+    ax1.set_title('Acquisition function values and sampled fidelities')
+    p = [a1, a2]
+    ax1.legend(p, [p_.get_label() for p_ in p], loc= 'upper left')
+
+    fig.savefig(results_folder + 'acqf_vals_trial_' + str(trial))
 
 
 def get_mfkg(model, objective, bounds, cost_aware_utility, project, fidelity_dim, is_multitask):
@@ -381,7 +449,6 @@ def get_mfkg(model, objective, bounds, cost_aware_utility, project, fidelity_dim
     print('fidelity dim', fidelity_dim)
 
     if is_multitask:
-        # get the largest mean under the current posterior
         curr_val_acqf = FixedFeatureAcquisitionFunction(
             acq_function=PosteriorMean(model),
             d=fidelity_dim + 2, 
@@ -400,15 +467,17 @@ def get_mfkg(model, objective, bounds, cost_aware_utility, project, fidelity_dim
     
 
     # pdb.set_trace()
+    # get the largest mean under the current posterior
     _, current_value = optimize_acqf(
         acq_function=curr_val_acqf,
         bounds = _bounds,
         q=1,
-        num_restarts=10, # TODO: change to 10 after debugging
-        raw_samples=512, # TODO: change to 1024 after debugging
+        num_restarts=10, 
+        raw_samples=1024, 
         options={"batch_limit": 10, "maxiter": 200},
-        # options={"batch_limit": 10, "maxiter": 10},
     )
+
+    print('current max posterior mean before sampling new points: {}'.format(current_value))
         
     # return the KG, the expected increase in best expected value conditioned on one more sample
     return qMultiFidelityKnowledgeGradient(
@@ -445,3 +514,13 @@ def process_multitask_data(X,y, add_last_col_X = False):
     print('expanded y', new_y)
     
     return new_X, new_y
+
+def get_task_covariance(model, X, num_outputs):
+    covar_matrix = model.covar_module(X[:num_outputs], X[:num_outputs]).evaluate().detach().numpy()
+    diag_inv_sqrt = np.zeros((num_outputs, num_outputs))
+    for i in range(num_outputs):
+        diag_inv_sqrt[i,i] = 1 / np.sqrt(covar_matrix[i,i])
+    
+    return diag_inv_sqrt @ covar_matrix @ diag_inv_sqrt
+    
+
