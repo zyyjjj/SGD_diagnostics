@@ -1,6 +1,4 @@
-from concurrent.futures import process
 from typing import Callable
-from matplotlib import projections
 import torch
 import random
 import numpy as np
@@ -16,7 +14,6 @@ from botorch.acquisition.monte_carlo import qExpectedImprovement, qNoisyExpected
 from botorch.sampling.samplers import SobolQMCNormalSampler, IIDNormalSampler
 from botorch.optim import optimize_acqf, optimize_acqf_mixed
 from botorch.optim.initializers import gen_one_shot_kg_initial_conditions
-from botorch.utils import standardize
 from botorch.acquisition.objective import LinearMCObjective, ScalarizedPosteriorTransform
 from botorch.acquisition.utils import project_to_target_fidelity
 from botorch.acquisition.fixed_feature import FixedFeatureAcquisitionFunction
@@ -26,11 +23,11 @@ from botorch.acquisition.cost_aware import InverseCostWeightedUtility
 from botorch.models.kernels.exponential_decay import ExponentialDecayKernel
 
 from gpytorch.mlls import ExactMarginalLogLikelihood
-from gpytorch.kernels import ScaleKernel, MaternKernel, IndexKernel
-from gpytorch.priors.torch_priors import GammaPrior
+from gpytorch.kernels import ScaleKernel, MaternKernel, IndexKernel, ProductKernel
 
-from .models.kernels import ModifiedMaternKernel, InputFidelityTaskProductKernel, InvertedExponentialDecayKernel
-from .utils.multitask_GP import *
+from .utils.plotting import plot_progress, plot_acqf_vals_and_fidelities
+from .utils.multi_task_fidelity_utils import process_multitask_data, expand_intermediate_fidelities, get_task_covariance
+
 
 def BO_trial(
         problem_evaluate: Callable,
@@ -46,6 +43,7 @@ def BO_trial(
         is_multitask = True,
         use_additive_kernel = False,
         multifidelity_params = None,
+        checkpoint_fidelities = None,
         **tkwargs
         ):
 
@@ -61,6 +59,8 @@ def BO_trial(
     acqf_vals = torch.Tensor().cpu()
     sampled_fidelities = []
 
+    num_checkpoints = len(checkpoint_fidelities)
+
     if multifidelity_params is not None:
         cost_model = AffineFidelityCostModel(
             fidelity_weights = multifidelity_params['fidelity_weights'], 
@@ -72,7 +72,7 @@ def BO_trial(
             def project(X):
                 return project_to_target_fidelity(X=X, target_fidelities=target_fidelities)
         else:
-            target_fidelities[fidelity_dim+1] = 0 # define the target fidelity for task to be 0 (main task)
+            target_fidelities[fidelity_dim+1] = 0 # define the target task fidelity to be 0 (main task)
             def project(X):
                 return project_to_target_fidelity(X=X, target_fidelities=target_fidelities)
     else:
@@ -111,9 +111,15 @@ def BO_trial(
 
     else:
         # generate initial data
+        # X has shape (n_initial_pts) * (design_dim + 1)
         X = generate_initial_samples(n_initial_pts, param_ranges, trial)
-        print(X)
+        # y has shape (num_trials * num_checkpoints) x num_outputs
         y = problem_evaluate(X)
+        # then, incorporate intermediate fidelities into X
+        # expanded X has shape (n_initial_pts * num_checkpoints) * (design_dim + 1)
+        X = expand_intermediate_fidelities(X, checkpoint_fidelities)
+        print(X.shape)
+
         init_batch_id = 1
 
         np.save(results_folder + 'X/X_' + str(trial) + '.npy', X)
@@ -127,13 +133,12 @@ def BO_trial(
     print('initial samples X and y: ', X, y)
     print('before BO start, X shape, y shape'.format(X.shape, y.shape))
 
-
-    num_outputs = y.shape[-1]
     # if multi-output, process X and y to add task dimension to X
+    num_outputs = y.shape[-1]
     if is_multitask:
-        param_ranges['task_idx'] = ['int', [0, num_outputs]]
+        param_ranges['task_idx'] = ['int', [0, num_outputs-1]]
+        # initial X does not contain the task column, so set add_last_col_X to True
         X, y = process_multitask_data(X, y, add_last_col_X = True)
-    
         max_posterior_mean = [y[::num_outputs].max().item()]
     else:
         max_posterior_mean = [y.max().item()]
@@ -153,20 +158,27 @@ def BO_trial(
 
         start_time = time.time()
 
-        # suggest_new_pt() calls fit_GP_model()
+        # this calls fit_GP_model() inside
         new_pt, acqf_val, current_max_posterior_mean = optimize_acqf_and_suggest_new_pt(
             algo, X, y, objective, bounds, param_ranges, trial, is_multitask, use_additive_kernel, is_int, 
             cost_aware_utility, project, fidelity_dim, num_outputs)
         # this should suggest a task-agnostic point (input, fidelity) since we observe all tasks
 
         max_posterior_mean.append(current_max_posterior_mean)
-
-        new_y = problem_evaluate(new_pt)
-
         sampled_fidelities.append(new_pt[0][fidelity_dim].item())
 
+        new_y = problem_evaluate(new_pt)
+        print('evaluation of newly sampled point {}'.format(new_y))
+        print('shape of evaluation of newly sampled point {}'.format(new_y.shape))
+
+        print('shape of newly sampled point before checkpoint-fidelity expansion {}'.format(new_pt.shape))
+        new_pt = expand_intermediate_fidelities(new_pt, checkpoint_fidelities)
+        print('shape of newly sampled point after checkpoint-fidelity expansion {}'.format(new_pt.shape))
+
         if is_multitask:
+            # new_pt contains the task column, so set add_last_col_X to False (default)
             new_pt, new_y = process_multitask_data(new_pt, new_y)
+            print('shape of newly sampled point and evaluation after multi-task expansion {}'.format(new_pt.shape, new_y.shape))
 
         acqf_vals = torch.cat((acqf_vals, acqf_val))
 
@@ -181,13 +193,14 @@ def BO_trial(
         y = torch.cat((y, new_y), dim = 0)
         print('shape of X and y after concatenating new data point: ', X.shape, y.shape)
 
+        # only log the best value of task 0 at the highest fidelity sampled, not the intermediate ones
         if not is_multitask:
-            log_best_so_far = y.cummax(0).values[n_initial_pts-1:]
+            log_best_so_far = y[::num_checkpoints].cummax(0).values[n_initial_pts-1:]
         else:
-            log_best_so_far = y[::num_outputs].cummax(0).values[n_initial_pts-1:]
+            log_best_so_far = y[::num_checkpoints][::num_outputs].cummax(0).values[n_initial_pts-1:]
         
-        #print('length of log_best_so_far', len(log_best_so_far))
-        #print('length of cum_cost', len(cum_costs))
+        print('length of log_best_so_far', len(log_best_so_far))
+        print('length of cum_cost', len(cum_costs))
             
         if verbose:
             print('Finished iteration {}, best value so far is {}'.format(iter, log_best_so_far[-1].item()))
@@ -238,11 +251,17 @@ def fit_GP_model(X, y, is_multitask, use_additive_kernel, is_int=None, num_outpu
                             ExponentialDecayKernel(active_dims = torch.tensor([X.shape[-1]-2])) + \
                             IndexKernel(active_dims = torch.tensor([X.shape[-1]-1]), num_tasks=num_outputs)
         else:
-            covar_module = MaternKernel(active_dims = torch.arange(0, X.shape[-1]-2)) * \
+            covar_module_ = MaternKernel(active_dims = torch.arange(0, X.shape[-1]-2)) * \
                             ExponentialDecayKernel(active_dims = torch.tensor([X.shape[-1]-2])) * \
                             IndexKernel(active_dims = torch.tensor([X.shape[-1]-1]), num_tasks=num_outputs)
+                        
+            covar_module = ProductKernel(
+                MaternKernel(active_dims = torch.arange(0, X.shape[-1]-2)),
+                ExponentialDecayKernel(active_dims = torch.tensor([X.shape[-1]-2])),
+                IndexKernel(active_dims = torch.tensor([X.shape[-1]-1]), num_tasks=num_outputs)
+            )
 
-        model = SingleTaskGP(X, y, covar_module = covar_module)
+        model = SingleTaskGP(X, y, covar_module = covar_module_) # TODO: check how the two ways of defining kernels differ
 
         # TODO: Later, explore kernels that deal with integers better
 
@@ -311,19 +330,21 @@ def optimize_acqf_and_suggest_new_pt(
         
         current_max_posterior_mean = acqf.current_value
 
+        # TODO: does fixing the task to be 0 affect the acqf optimization?
+        # I think so, because it enforces evaluating the main task
+        # can acqf vals at other tasks be higher? 
         if is_multitask:
             fixed_features = {fidelity_dim + 1: 0} # fixed task to be 0
             print('fix task feature to be 0 before calling optimize_acqf()')
-            _bounds = bounds[:,:-1]
         else:
             fixed_features = None
-            _bounds = bounds
         
-
+        # generate KG initial conditions with fidelity fixed to 1 and task fixed to 0 (if multi-task)
+        # note that bounds is still the full set of bounds, including those for the fixed features
         X_init = gen_one_shot_kg_initial_conditions(
             acq_function = acqf,
             bounds=bounds,
-            fixed_features = fixed_features,
+            # fixed_features = fixed_features,
             q=1,
             num_restarts=10,
             raw_samples=512,
@@ -331,19 +352,18 @@ def optimize_acqf_and_suggest_new_pt(
 
         candidates, acqf_val = optimize_acqf(
             acq_function = acqf,
-            bounds=_bounds,
-            q=1, # TODO: change back to 1
-            num_restarts=10,
-            raw_samples=512,
-            fixed_features = fixed_features,
-            batch_initial_conditions=X_init,
+            bounds = bounds, 
+            q = 1,
+            num_restarts = 10,
+            raw_samples = 512,
+            # fixed_features = fixed_features,
+            batch_initial_conditions = X_init,
             options={"batch_limit": 5, "maxiter": 200},
         )
 
     if len(acqf_val.size()) == 0:
         acqf_val = acqf_val.unsqueeze(0)
     
-    # TODO: check correctness: key step of rounding integer entries of suggested candidate
     for i in range(candidates.shape[-1]):
         if is_int[i]:
             candidates[..., i] = torch.round(candidates[..., i])
@@ -401,49 +421,6 @@ def get_param_bounds(param_ranges):
     return bounds.float(), is_int
     
 
-def plot_progress(metric, cum_costs, results_folder, trial, max_posterior_mean = None):
-    # metrics: dictionary of {metric_name: list of metric values}
-
-    k, v = metric
-    fig, ax1 = plt.subplots()
-
-    a1, = ax1.plot(cum_costs, v, color = 'g', label = 'best objective')
-    ax1.set_xlabel('resources consumed')
-    ax1.set_ylabel('best objective value achieved')
-
-    if max_posterior_mean is not None:
-        ax2 = ax1.twinx()
-        a2, = ax2.plot(cum_costs, max_posterior_mean, color = 'm', label = 'max posterior mean')
-        ax2.set_ylabel('maximum posterior mean')
-    
-    plt.title(k + '\n final objective value achieved: {:.2f}, resources consumed: {:.2f}'.format(v[-1].item(), cum_costs[-1]))
-    p = [a1, a2]
-    ax1.legend(p, [p_.get_label() for p_ in p], loc= 'upper left')
-
-    fig.savefig(results_folder + 'visualization_trial_' + str(trial))
-
-
-def plot_acqf_vals_and_fidelities(acqf_vals, sampled_fidelites, results_folder, trial):
-
-
-    fig, ax1 = plt.subplots()
-
-    a1, = ax1.plot(acqf_vals.numpy(), color = 'g', label = 'acquisition function value')
-    ax1.set_xlabel('Iterations of BO')
-    ax1.set_ylabel('Acquisition function value')
-    ax1.axhline(c = 'grey', linestyle = '--')
-    
-    ax2 = ax1.twinx()
-    a2, = ax2.plot(sampled_fidelites, color = 'm', label = 'sampled fidelities')
-    ax2.set_ylabel('sampled fidelities')
-
-    ax1.set_title('Acquisition function values and sampled fidelities')
-    p = [a1, a2]
-    ax1.legend(p, [p_.get_label() for p_ in p], loc= 'upper left')
-
-    fig.savefig(results_folder + 'acqf_vals_trial_' + str(trial))
-
-
 def get_mfkg(model, objective, bounds, cost_aware_utility, project, fidelity_dim, is_multitask):
 
     print('fidelity dim', fidelity_dim)
@@ -465,9 +442,8 @@ def get_mfkg(model, objective, bounds, cost_aware_utility, project, fidelity_dim
         )
         _bounds = bounds[:,:-1]
     
-
-    # pdb.set_trace()
-    # get the largest mean under the current posterior
+    # get the largest mean (of the main task at highest fidelity) under the current posterior,
+    # optimizing with respect to the designs only
     _, current_value = optimize_acqf(
         acq_function=curr_val_acqf,
         bounds = _bounds,
@@ -479,48 +455,14 @@ def get_mfkg(model, objective, bounds, cost_aware_utility, project, fidelity_dim
 
     print('current max posterior mean before sampling new points: {}'.format(current_value))
         
-    # return the KG, the expected increase in best expected value conditioned on one more sample
+    # return the KG, the expected increase in best expected value conditioned on q more samples
     return qMultiFidelityKnowledgeGradient(
         model=model,
         num_fantasies=128,
         current_value=current_value,
         cost_aware_utility=cost_aware_utility,
         project=project,
-        #posterior_transform=objective
     )
 
-def process_multitask_data(X,y, add_last_col_X = False):
-    # the goal is to transform (multi-dim input, multi-dim output) data into (multi-dim input, single-dim output) data
-    # input shapes: X: num_trials x (design_dim + 1) or num_trials x (design_dim + 2) ; 
-    #               y: num_trials x output_dim
-    # target shapes: X: (num_trials * output_dim) x (design_dim + 2) ; y: num_trials x 1
 
-    num_trials = y.shape[0]
-    num_outputs = y.shape[-1]
-    
-    X_repeat = X.repeat_interleave(num_outputs, 0)
-    task_idx_repeat = torch.arange(0,num_outputs).unsqueeze(1).repeat(num_trials,1)
-
-    if add_last_col_X:
-        # X shape: num_trials x (design_dim + 1)
-        new_X = torch.cat((X_repeat, task_idx_repeat), 1)
-    else:
-        # X shape: num_trials x (design_dim + 2), but the last column is a dummy task column, not meaningful
-        new_X = torch.cat((X_repeat[:, :-1], task_idx_repeat), 1)
-    
-    print('expanded X', new_X)
-
-    new_y = y.flatten().unsqueeze(1)
-    print('expanded y', new_y)
-    
-    return new_X, new_y
-
-def get_task_covariance(model, X, num_outputs):
-    covar_matrix = model.covar_module(X[:num_outputs], X[:num_outputs]).evaluate().detach().numpy()
-    diag_inv_sqrt = np.zeros((num_outputs, num_outputs))
-    for i in range(num_outputs):
-        diag_inv_sqrt[i,i] = 1 / np.sqrt(covar_matrix[i,i])
-    
-    return diag_inv_sqrt @ covar_matrix @ diag_inv_sqrt
-    
 

@@ -11,9 +11,6 @@ from botorch.acquisition.objective import GenericMCObjective, LinearMCObjective
 
 from gpytorch.mlls import ExactMarginalLogLikelihood
 
-
-
-
 torch.random.manual_seed(2010)
 
 if torch.cuda.is_available():
@@ -22,8 +19,6 @@ tkwargs = {
     "dtype": torch.double,
     "device": torch.device("cuda:0" if torch.cuda.is_available() else "cpu"),
 }
-
-
 
 def optimize_acqf_and_get_candidate(acq_func, bounds, batch_size):
     """Optimizes the acquisition function, and returns a new candidate and a noisy observation."""
@@ -51,7 +46,6 @@ def construct_acqf(model, objective, num_samples, best_f):
     )
     return qEI
 
-
 n_init = 20
 n_steps = 20
 batch_size = 3
@@ -59,15 +53,11 @@ num_samples = 128
 n_trials = 3
 verbose = True
 
-
-
 if __name__ == '__main__':
 
-    # TODO: modify objective (but what do you map non-main output to? posterior mean of main output?)
+    # TODO: modify objective (but what do you map non-main output to? posterior mean of main output? Yes for KG)
     # is this why EI is not suitable here? Do KG and PES require objective()?
     # Instead of explicitly using objective(), KG relies on the "project" operation
-
-
 
     problem = TestProblem(noise_std = 0.001, negate=True).to(**tkwargs)
     weights = torch.tensor([0.8, 0.2]).to(**tkwargs)

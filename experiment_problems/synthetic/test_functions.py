@@ -71,7 +71,6 @@ class TestProblem_Branin(Branin):
         self.task_range = torch.linspace(0, 1, num_tasks).unsqueeze(-1) # shape = (num_tasks, 1)
         super().__init__(noise_std = noise_std, negate = negate)        
         self.bounds = torch.tensor(self._bounds).t()
-
         
     def evaluate_true(self, X: Tensor) -> Tensor:
         # shape of X: (number of data points, input dimension) 

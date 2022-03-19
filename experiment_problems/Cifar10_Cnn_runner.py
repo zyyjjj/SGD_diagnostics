@@ -1,5 +1,5 @@
 from functools import partial
-from Cifar10_Cnn import HPs_to_VARY, MultiFidelity_PARAMS, problem_evaluate
+from Cifar10_Cnn import HPs_to_VARY, MultiFidelity_PARAMS, checkpoint_fidelities, problem_evaluate
 import sys
 import torch
 sys.path.append('..')
@@ -28,12 +28,23 @@ algo = sys.argv[2] # could be 'EI', 'KG'
 is_multitask = bool(int(sys.argv[3])) # 1 if multi-task; 0 if single-task
 use_additive_kernel = bool(int(sys.argv[4])) # 1 if using additive kernel; 0 if using product kernel
 
+# TODO: have problem_evaluate take intermediate_fidelites as argument
 if not is_multitask:
     # only return the one main metric
     key0, val0 = list(return_metrics.items())[0]
-    problem_evaluate_fixed_metrics = partial(problem_evaluate, return_metrics = {key0: val0}, designs = HPs_to_VARY)
+    problem_evaluate_fixed_metrics = partial(
+        problem_evaluate, 
+        return_metrics = {key0: val0}, 
+        designs = HPs_to_VARY, 
+        checkpoint_fidelities = checkpoint_fidelities
+        )
 else:
-    problem_evaluate_fixed_metrics = partial(problem_evaluate, return_metrics = return_metrics, designs = HPs_to_VARY)
+    problem_evaluate_fixed_metrics = partial(
+        problem_evaluate, 
+        return_metrics = return_metrics, 
+        designs = HPs_to_VARY, 
+        checkpoint_fidelities = checkpoint_fidelities
+        )
     problem_name += '_MT'
 
 if torch.cuda.is_available():
@@ -50,12 +61,15 @@ experiment_manager(
     algo = algo,
     first_trial = first_trial,
     last_trial = last_trial,
-    n_initial_pts = 10,
+    n_initial_pts = 2,
     n_bo_iter = 50,
     restart = False,
     verbose = True,
     is_multitask = is_multitask,
     use_additive_kernel = use_additive_kernel,
     multifidelity_params = MultiFidelity_PARAMS,
+    checkpoint_fidelities = checkpoint_fidelities,
     **tkwargs
 )
+
+# TODO: figure out whether I need to specify all the arguments or just wrap them into **kwargs

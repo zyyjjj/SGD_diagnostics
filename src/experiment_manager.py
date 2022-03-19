@@ -20,8 +20,9 @@ def experiment_manager(
     restart: bool,
     verbose: bool,
     is_multitask: bool,
-    use_additive_kernel: bool,
-    multifidelity_params: dict,
+    use_additive_kernel = None,
+    multifidelity_params = None,
+    checkpoint_fidelities = None,
     **tkwargs
 ) -> None:
 
@@ -55,5 +56,6 @@ def experiment_manager(
             is_multitask = is_multitask,
             use_additive_kernel = use_additive_kernel,
             multifidelity_params = multifidelity_params,
+            checkpoint_fidelities = checkpoint_fidelities,
             **tkwargs
         )

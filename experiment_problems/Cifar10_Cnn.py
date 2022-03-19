@@ -17,17 +17,19 @@ HPs_to_VARY = {
     'lr': ['uniform', [0.00001, 0.1]],
     'log2_batch_size': ['int', [5, 10]],
     'log2_aux_batch_size': ['int', [5, 10]],
-    'n_channels_1': ['int', [32, 512]],
-    'n_channels_2': ['int',  [32, 512]],
+    'n_channels_1': ['int', [32, 64]],
+    'n_channels_2': ['int',  [32, 64]],
     'iteration_fidelity': ['uniform', [0.25, 1]]
 }
 
 MultiFidelity_PARAMS = {
     "fidelity_dim": 5,
-    "target_fidelities": {5: 1.0, 6: 0},
+    "target_fidelities": {5: 1.0}, # {5: 1.0, 6: 0},
     "fidelity_weights": {5: 1},
     "fixed_cost": 1
 }
+
+checkpoint_fidelities = [0.25, 0.5, 1]
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -93,17 +95,18 @@ class CifarCnnModel(nn.Module):
     def forward(self, x):
         return self.network(x)
 
-def problem_evaluate(X, return_metrics, designs = HPs_to_VARY):
+def problem_evaluate(X, return_metrics, designs = HPs_to_VARY, checkpoint_fidelities = checkpoint_fidelities):
     """
-    X is a tensor of size (num_trials, num_hps_to_vary)
-    return_metrics is a dictionary {'metric_name': 'return_type'}
+    INPUTS:
+    X: a tensor of size (num_trials, num_hps_to_vary)
+    return_metrics: a dictionary {'metric_name': 'return_type'}
         where 'metric_name' in ['training_loss', 'val_loss', 'val_acc']
         and 'return_type' in ['mean', 'last', 'max', 'min']
+    checkpoint_fidelities: a list of numbers <= 1, with the last entry being 1, 
+        representing the checkpoints of iteration fidelity values at which we want to log outputs
     """
 
     input_shape = X.shape
-
-    #print(input_shape, len(HPs_to_VARY))
 
     assert input_shape[1] == len(HPs_to_VARY), \
         'Input dimension 1 should match the number of hyperparameters to vary'
@@ -147,25 +150,39 @@ def problem_evaluate(X, return_metrics, designs = HPs_to_VARY):
             num_epochs = int(X[i][5] * max_num_epochs)
         else:
             num_epochs = max_num_epochs
+    
+        # list of checkpoints (a few fidelities) where outputs are logged
+        checkpoint_epochs = []
+        for frac_fid in checkpoint_fidelities:
+            checkpoint_epochs.append(int(X[i][5] * frac_fid * max_num_epochs))
         
         print('plan to train for {} epochs'.format(num_epochs))
+        print('checkpoint epochs: ', checkpoint_epochs)
 
         logged_performance_metrics = learner.fit(num_epochs, device = device)
-
-        output = []
-        for k,t in return_metrics.items():
-            if t == 'mean':
-                out = np.mean(logged_performance_metrics[k])
-            elif t == 'last':
-                out = logged_performance_metrics[k][-1]
-            elif t == 'max':
-                out = max(logged_performance_metrics[k])
-            elif t == 'min':
-                out = min(logged_performance_metrics[k])
         
-            output.append(out)
+        # then, extract intermediate signals from logged_perf_metrics[n_epochs] 
+        # for n_epochs in checkpoint_epochs
+        # desired output y shape: (n_trials * n_checkpoints) x num_outputs, e.g.
+        # i.e., rows are in the order of (trial 0, fid 0, all outputs), (trial 0, fid 1, all outputs), ...
+        
+        for checkpoint in checkpoint_epochs:
+            output = []
+            for k,t in return_metrics.items():
+                if t == 'mean':
+                    out = np.mean(logged_performance_metrics[k][:checkpoint])
+                elif t == 'last':
+                    out = logged_performance_metrics[k][checkpoint] 
+                    # TODO: there's a bug here
+                    # likely because I only logged one number rather than the full history for some metrics
+                elif t == 'max':
+                    out = max(logged_performance_metrics[k][:checkpoint])
+                elif t == 'min':
+                    out = min(logged_performance_metrics[k][:checkpoint])
+            
+                output.append(out)
 
         outputs.append(output)
     
-    # return a tensor of shape num_trials x len(return_metrics)
+    # return a tensor of shape (num_trials * num_checkpoints) x len(return_metrics)
     return torch.Tensor(outputs)
