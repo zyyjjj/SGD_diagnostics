@@ -15,7 +15,10 @@ MultiFidelity_PARAMS = {
     "fixed_cost": 0
 }
 
-def problem_evaluate(X, is_multitask):
+checkpoint_fidelities = [0.25, 0.5, 1]
+
+
+def problem_evaluate(X, is_multitask, checkpoint_fidelities = checkpoint_fidelities):
     # input (x, s)
     # output task(s), where task 0 = [noise, noise, ..., x], task 1 = [x, x, ..., x]
 
@@ -28,21 +31,25 @@ def problem_evaluate(X, is_multitask):
         s = X[i][1].item()
         y = 10 - (x-3)**2
 
-        n_iters = round(max_iters * s)
-        # n_iters = int(max_iters * s)
+        checkpoints = []
+        for frac_fid in checkpoint_fidelities:
+            checkpoints.append(int(max_iters * s * frac_fid))
 
-        if n_iters < max_iters:
-            task_0 = torch.randn(1)
-        else:
-            task_0 = torch.tensor([y])
-        
-        task_1 = torch.tensor([y])
 
-        if is_multitask:
-            outputs.append(torch.cat((task_0, task_1)))
-        else:
-            outputs.append(task_0)
-    
+        for checkpoint in checkpoints:
+            print('evaluating at checkpoint {}'.format(checkpoint))
+            if checkpoint < max_iters - 1:
+                task_0 = torch.randn(1)
+            else:
+                task_0 = torch.tensor([y])
+            task_1 = torch.tensor([y])
+
+            if is_multitask:
+                outputs.append(torch.cat((task_0, task_1)))
+            else:
+                outputs.append(task_0)
+
+    print(outputs)    
     return torch.stack(outputs)
 
 

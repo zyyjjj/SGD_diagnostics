@@ -117,7 +117,7 @@ def BO_trial(
         y = problem_evaluate(X)
         # then, incorporate intermediate fidelities into X
         # expanded X has shape (n_initial_pts * num_checkpoints) * (design_dim + 1)
-        X = expand_intermediate_fidelities(X, checkpoint_fidelities)
+        X = expand_intermediate_fidelities(X, checkpoint_fidelities, last_dim_is_task = False)
         print(X.shape)
 
         init_batch_id = 1
@@ -138,7 +138,7 @@ def BO_trial(
     if is_multitask:
         param_ranges['task_idx'] = ['int', [0, num_outputs-1]]
         # initial X does not contain the task column, so set add_last_col_X to True
-        X, y = process_multitask_data(X, y, add_last_col_X = True)
+        X, y = process_multitask_data(X, y, num_checkpoints, add_last_col_X = True)
         max_posterior_mean = [y[::num_outputs].max().item()]
     else:
         max_posterior_mean = [y.max().item()]
@@ -172,12 +172,12 @@ def BO_trial(
         print('shape of evaluation of newly sampled point {}'.format(new_y.shape))
 
         print('shape of newly sampled point before checkpoint-fidelity expansion {}'.format(new_pt.shape))
-        new_pt = expand_intermediate_fidelities(new_pt, checkpoint_fidelities)
+        new_pt = expand_intermediate_fidelities(new_pt, checkpoint_fidelities, last_dim_is_task = True)
         print('shape of newly sampled point after checkpoint-fidelity expansion {}'.format(new_pt.shape))
 
         if is_multitask:
             # new_pt contains the task column, so set add_last_col_X to False (default)
-            new_pt, new_y = process_multitask_data(new_pt, new_y)
+            new_pt, new_y = process_multitask_data(new_pt, new_y, num_checkpoints, add_last_col_X=True)
             print('shape of newly sampled point and evaluation after multi-task expansion {}'.format(new_pt.shape, new_y.shape))
 
         acqf_vals = torch.cat((acqf_vals, acqf_val))
@@ -197,7 +197,7 @@ def BO_trial(
         if not is_multitask:
             log_best_so_far = y[::num_checkpoints].cummax(0).values[n_initial_pts-1:]
         else:
-            log_best_so_far = y[::num_checkpoints][::num_outputs].cummax(0).values[n_initial_pts-1:]
+            log_best_so_far = y[::num_outputs][(num_checkpoints-1)::num_checkpoints].cummax(0).values[n_initial_pts-1:]
         
         print('length of log_best_so_far', len(log_best_so_far))
         print('length of cum_cost', len(cum_costs))
@@ -335,7 +335,7 @@ def optimize_acqf_and_suggest_new_pt(
         # can acqf vals at other tasks be higher? 
         if is_multitask:
             fixed_features = {fidelity_dim + 1: 0} # fixed task to be 0
-            print('fix task feature to be 0 before calling optimize_acqf()')
+            # print('fix task feature to be 0 before calling optimize_acqf()')
         else:
             fixed_features = None
         
@@ -370,6 +370,7 @@ def optimize_acqf_and_suggest_new_pt(
 
     print('optimize MultiFidelityKG, get candidates ', candidates, ', acqf_val ', acqf_val)
 
+    # candidates has shape q x (design_dim + 2) -- both fidelity and task are included
     return candidates, acqf_val, current_max_posterior_mean
 
 

@@ -1,5 +1,5 @@
 from functools import partial
-from synthetic_test import problem_evaluate, Input_RANGES, MultiFidelity_PARAMS
+from synthetic_test import problem_evaluate, Input_RANGES, MultiFidelity_PARAMS, checkpoint_fidelities
 import sys
 import torch
 sys.path.append('..')
@@ -11,7 +11,7 @@ first_trial = last_trial = int(sys.argv[1])
 algo = sys.argv[2] # could be 'EI', 'KG'
 is_multitask = bool(int(sys.argv[3])) # 1 if multi-task; 0 if single-task
 
-problem_evaluate_fixed_outputs = partial(problem_evaluate, is_multitask = is_multitask)
+problem_evaluate_fixed_outputs = partial(problem_evaluate, is_multitask = is_multitask, checkpoint_fidelities = checkpoint_fidelities)
 if is_multitask:
     problem_name += '_MT'
 
@@ -36,5 +36,6 @@ experiment_manager(
     is_multitask = is_multitask,
     use_additive_kernel = None,
     multifidelity_params = MultiFidelity_PARAMS,
+    checkpoint_fidelities = checkpoint_fidelities,
     **tkwargs
 )
