@@ -16,7 +16,9 @@ def process_multitask_data(X, y, num_checkpoints, add_last_col_X = False):
     num_outputs = y.shape[-1]
     
     X_repeat = X.repeat_interleave(num_outputs, 0)
-    task_idx_repeat = torch.arange(0,num_outputs).unsqueeze(1).repeat(num_trials,1).repeat_interleave(num_checkpoints, 0)
+    # X_repeat = X.repeat(num_outputs, 1)
+    # task_idx_repeat = torch.arange(0,num_outputs).unsqueeze(1).repeat(num_trials,1).repeat_interleave(num_checkpoints, 0)
+    task_idx_repeat = torch.arange(0, num_outputs).unsqueeze(1).repeat(num_checkpoints, 1).repeat(num_trials, 1)
 
     if add_last_col_X:
         new_X = torch.cat((X_repeat, task_idx_repeat), 1)
@@ -30,7 +32,7 @@ def process_multitask_data(X, y, num_checkpoints, add_last_col_X = False):
 
     return new_X, new_y
 
-def expand_intermediate_fidelities(X, checkpoint_fidelities):
+def expand_intermediate_fidelities(X, checkpoint_fidelities, last_dim_is_task = True):
     """ 
     Expands the input to include intermediate fidelity values.
     INPUT shape: X: trials x (design_dim + 1); 
@@ -42,11 +44,25 @@ def expand_intermediate_fidelities(X, checkpoint_fidelities):
     """
 
     num_fidelities = len(checkpoint_fidelities)
-    designs = X[:, :-1].repeat_interleave(num_fidelities, 0)
 
-    fids = torch.kron(X[:,-1], torch.tensor(checkpoint_fidelities)).unsqueeze(1)
+    if not last_dim_is_task:
+        # last dim is fidelity; this case only holds when intial samples are taken and no task column has been created
+        fidelity_dim = -1
+    else:
+        # last dim is task; this holds for processing candidates returned by the acquisition function
+        fidelity_dim = -2
+    
+    designs = X[:, :fidelity_dim].repeat_interleave(num_fidelities, 0)
 
+    fids = torch.kron(X[:,fidelity_dim], torch.tensor(checkpoint_fidelities)).unsqueeze(1)
+
+    print('fidelity checkpoints', fids)
+
+    # does not include the task column; task column to be added in process_multitask_data()
     return torch.cat((designs, fids), 1)
+
+# TODO: write a function get_task_fidelity_covariance()
+# TODO: Next is to understand how to inspect the task-fidelity covariance!
 
 
 def get_task_covariance(model, X, num_outputs):
