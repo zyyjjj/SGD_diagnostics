@@ -61,9 +61,28 @@ def expand_intermediate_fidelities(X, checkpoint_fidelities, last_dim_is_task = 
     # does not include the task column; task column to be added in process_multitask_data()
     return torch.cat((designs, fids), 1)
 
-# TODO: write a function get_task_fidelity_covariance()
-# TODO: Next is to understand how to inspect the task-fidelity covariance!
+# TODO: test correctness of the task-fidelity covariance!
 
+def get_task_fidelity_covariance(model, X, num_outputs, num_fidelities):
+    # from existing data, fetch an array of datapoints with identical designs and spread over different fidelities and tasks
+    # because the kernel components over (design, fidelity, task) are separable, we use this to extract the task_fidelity covariance
+
+    tasks = torch.arange(0, num_outputs)
+    fidelities = torch.linspace(0.25, 1, num_fidelities) # generate num_fidelities evenly spaced points between 0 and 1
+
+    tasks = tasks.unsqueeze(1).repeat_interleave(num_fidelities, 0)
+    fidelities = fidelities.unsqueeze(1).repeat(num_outputs, 1)
+    
+    test_X = torch.cat((X[:(num_outputs*num_fidelities), :-2], fidelities, tasks), 1)
+    print(test_X, test_X.shape)
+
+    covar_matrix = model.covar_module(test_X, test_X).evaluate().detach().numpy()
+    diag_inv_sqrt = np.zeros((num_outputs*num_fidelities, num_outputs*num_fidelities))
+    for i in range(num_outputs*num_fidelities):
+        diag_inv_sqrt[i,i] = 1 / np.sqrt(covar_matrix[i,i])
+    
+    return diag_inv_sqrt @ covar_matrix @ diag_inv_sqrt
+    
 
 def get_task_covariance(model, X, num_outputs):
     covar_matrix = model.covar_module(X[:num_outputs], X[:num_outputs]).evaluate().detach().numpy()
