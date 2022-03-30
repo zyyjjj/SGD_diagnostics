@@ -1,11 +1,11 @@
 import torch.nn as nn
 import torch
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, random_split, Subset
 from torch.optim import SGD, Adagrad, Adam
 import torchvision
 import torchvision.transforms as transforms
 import neptune.new as neptune
-import os, sys
+import os, sys, random
 
 sys.path.append('../')
 sys.path.append('/home/yz685/SGD_diagnostics/')
@@ -14,7 +14,7 @@ from src.utils.callback import *
 
 
 HPs_to_VARY = {
-    'lr': ['uniform', [0.00001, 0.1]],
+    'lr': ['uniform', [-5, -2]],
     'log2_batch_size': ['int', [5, 10]],
     'log2_aux_batch_size': ['int', [5, 10]],
     'n_channels_1': ['int', [32, 64]],
@@ -35,10 +35,12 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 transform = transforms.Compose(
     [transforms.ToTensor(),
-    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-    transforms.RandomHorizontalFlip(0.4),
-    transforms.RandomAffine(0, translate  = (0.25, 0.25))
+    transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
+    # transforms.RandomHorizontalFlip(0.4),
+    # transforms.RandomAffine(0, translate  = (0.25, 0.25))
     ])
+
+DEBUG = True
 
 train_frac = 0.8
 train_ds_whole = torchvision.datasets.CIFAR10('/home/yz685/SGD_diagnostics/experiments/cifar',
@@ -49,7 +51,7 @@ test_ds = torchvision.datasets.CIFAR10('/home/yz685/SGD_diagnostics/experiments/
 train_size = int(len(train_ds_whole) * train_frac)
 val_size = len(train_ds_whole) - train_size
 
-max_num_epochs = 50
+max_num_epochs = 20
 
 
 class CifarCnnModel(nn.Module):
@@ -95,7 +97,7 @@ class CifarCnnModel(nn.Module):
     def forward(self, x):
         return self.network(x)
 
-def problem_evaluate(X, return_metrics, designs = HPs_to_VARY, checkpoint_fidelities = checkpoint_fidelities):
+def problem_evaluate(X, return_metrics, designs = HPs_to_VARY, checkpoint_fidelities = checkpoint_fidelities, debug = DEBUG):
     """
     INPUTS:
     X: a tensor of size (num_trials, num_hps_to_vary)
@@ -117,7 +119,7 @@ def problem_evaluate(X, return_metrics, designs = HPs_to_VARY, checkpoint_fideli
 
     for i in range(input_shape[0]):
 
-        base_config = {'lr': X[i][0].item(),
+        base_config = {'lr': 10**(X[i][0].item()),
             'batch_size': 2**(X[i][1].item()),
             'aux_batch_size': 2**(X[i][2].item()),
             'running_avg_window_size': 10}        
@@ -128,8 +130,20 @@ def problem_evaluate(X, return_metrics, designs = HPs_to_VARY, checkpoint_fideli
         model = CifarCnnModel(int(X[i][3].item()), int(X[i][4].item()))
         model.to(device)
 
-        optimizer = torch.optim.Adam
-        train_ds, val_ds = random_split(train_ds_whole, [train_size, val_size])
+        # pdb.set_trace()
+
+        # optimizer = torch.optim.Adam
+        optimizer = torch.optim.SGD
+
+        if debug:
+            train_size = 4000
+            val_size = 1000
+            subds_indices = random.sample(range(len(train_ds_whole)), train_size + val_size)
+            subds = Subset(train_ds_whole, subds_indices)
+            train_ds, val_ds = random_split(subds, [train_size, val_size])
+        else:   
+            train_size, val_size = 40000, 10000 # TODO: don't hard code this         
+            train_ds, val_ds = random_split(train_ds_whole, [train_size, val_size])
 
         # run = neptune.init(
         #     project="zyyjjj/SGD-diagnostics",
@@ -138,11 +152,16 @@ def problem_evaluate(X, return_metrics, designs = HPs_to_VARY, checkpoint_fideli
         # run["sys/tags"].add(['cifar_BO'])  # organize things
         # run['params'] = hp_config + [{'arch_parmas': [X[i][3].item(), X[i][4].item()]}]
             
-        loss_fn = torch.nn.functional.cross_entropy
+        loss_fn = torch.nn.CrossEntropyLoss()
         callbacks = [
             #EarlyStopping(metric = 'val_acc', patience = 5, warmup = 20, to_minimize=False, tolerance_thresh=0.05),
             AuxMetricsLogger()
         ]
+        # learner at 0x7f674709c610
+        # learner.model.parameters() 0x7f66e044fac0 -- this changes every round 0x7f66e0345f20 
+        # learner.model.parameters() 0x7f1a465d8ac0
+        # self.model.parameters()  0x7f1a465d8a50
+        # but loss is increasing
 
         learner = Learner(hp_config, model, train_ds, val_ds, optimizer, loss_fn, callbacks)
         
@@ -154,7 +173,7 @@ def problem_evaluate(X, return_metrics, designs = HPs_to_VARY, checkpoint_fideli
         # list of checkpoints (a few fidelities) where outputs are logged
         checkpoint_epochs = []
         for frac_fid in checkpoint_fidelities:
-            checkpoint_epochs.append(int(X[i][5] * frac_fid * max_num_epochs))
+            checkpoint_epochs.append(min(int(X[i][5] * frac_fid * max_num_epochs)+1, num_epochs) )
         
         print('plan to train for {} epochs'.format(num_epochs))
         print('checkpoint epochs: ', checkpoint_epochs)
@@ -167,13 +186,17 @@ def problem_evaluate(X, return_metrics, designs = HPs_to_VARY, checkpoint_fideli
         # i.e., rows are in the order of (trial 0, fid 0, all outputs), (trial 0, fid 1, all outputs), ...
         
         for checkpoint in checkpoint_epochs:
+            print('extracting outputs at checkpoint {}'.format(checkpoint))
             output = []
             for k,t in return_metrics.items():
                 if t == 'mean':
                     out = np.mean(logged_performance_metrics[k][:checkpoint])
                 elif t == 'last':
-                    out = logged_performance_metrics[k][checkpoint] 
-                    # TODO: there's a bug here
+                    print('key: ', k)
+                    print(logged_performance_metrics[k])
+                    # print('length of stored metric history: ', len(logged_performance_metrics[k]) )
+                    out = logged_performance_metrics[k][checkpoint-1] 
+                    # TODO: there's a bug here?
                     # likely because I only logged one number rather than the full history for some metrics
                 elif t == 'max':
                     out = max(logged_performance_metrics[k][:checkpoint])
@@ -182,7 +205,7 @@ def problem_evaluate(X, return_metrics, designs = HPs_to_VARY, checkpoint_fideli
             
                 output.append(out)
 
-        outputs.append(output)
+            outputs.append(output)
     
     # return a tensor of shape (num_trials * num_checkpoints) x len(return_metrics)
     return torch.Tensor(outputs)

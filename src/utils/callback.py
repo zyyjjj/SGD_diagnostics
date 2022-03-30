@@ -5,6 +5,8 @@ from torch.nn.utils import parameters_to_vector
 import torch.nn.functional as F
 from typing import *
 import copy
+import math
+import pdb
 
 class BaseCallback():
     """
@@ -43,18 +45,26 @@ class AuxMetricsLogger(BaseCallback):
         self.aux_epoch_metrics = defaultdict(list)
         self.results_folder = results_folder # has trial info
 
-        self.prev_grad = None
-        self.prev_grads = torch.Tensor().cpu()
+        # self.prev_grad = None
+        # self.prev_grads = torch.Tensor().cpu()
         # self.model_params = torch.Tensor().cpu() # is this necessary? maybe for regularization, or edge activation statistics
 
-        self.prev_cosine_sims = []
+        # self.prev_cosine_sims = []
 
     def on_epoch_start(self, learner):  
 
         self.new_epoch = True
+
+        # self.batch_metrics stores the batch-wise metrics in one epoch
+        # each key is a metric name, value is the list of metric values for each batch
         self.batch_metrics = defaultdict(list)
 
-        self.epoch_accum_grad = torch.Tensor().cpu()        
+        self.epoch_accum_grad = torch.Tensor().cpu()      
+        #TODO: reset self.prev_grad and self.prev_grads and self.prev_cosine_sims here  
+        # check correctness
+        self.prev_grad = None
+        self.prev_grads = torch.Tensor().cpu()
+        self.prev_cosine_sims = []
     
     def on_after_backward(self, learner):
 
@@ -62,12 +72,11 @@ class AuxMetricsLogger(BaseCallback):
 
         # append batch-wise signals to self.batch_metrics        
         for k, v in signals.items():
-            if self.new_epoch:
-                self.batch_metrics[k].append([v])
-            else:
-                self.batch_metrics[k][-1].append(v)
-
-        self.new_epoch = False
+            self.batch_metrics[k].append(v)
+            # if self.new_epoch or self.batch_metrics[k] == []:
+            #     self.batch_metrics[k].append([v])
+            # else:
+            #     self.batch_metrics[k][-1].append(v)
 
         # log to neptune
         if learner.run is not None: 
@@ -78,22 +87,28 @@ class AuxMetricsLogger(BaseCallback):
     # return dictionary of additional signals
     def batch_gradient_signals(self, learner):
 
+        # problem: only epoch 0 batch 0 returns nonzero signal
+
         batch_grad = parameters_to_vector(j.grad for j in learner.model.parameters()).cpu().detach().clone()
         norm_batch_grad = torch.linalg.norm(batch_grad).item()
-        norm_aux_batch_grad = torch.linalg.norm(parameters_to_vector(j.grad for j in learner.aux_model.parameters()).cpu()).item()
-        diff_sq_norm_main_aux_batch_grads = norm_batch_grad**2 - norm_aux_batch_grad**2
+        # norm_aux_batch_grad = torch.linalg.norm(parameters_to_vector(j.grad for j in learner.aux_model.parameters()).cpu()).item()
+        # diff_sq_norm_main_aux_batch_grads = norm_batch_grad**2 - norm_aux_batch_grad**2
+
+        # TODO:
+        # reset self.prev_grad and self.prev_grads
 
         if self.prev_grad is not None:
             norm_change_batch_grad = torch.linalg.norm(batch_grad - self.prev_grad).item()
             denoise_signal_1 = norm_batch_grad**2 - 1/2 * norm_change_batch_grad**2
             #denoise_signal_2 = denoise_signal_1 / norm_batch_grad**2
             cosine_sim_batch_grad = F.cosine_similarity(self.prev_grad, batch_grad, dim=0).item()
+            self.prev_cosine_sims.append(cosine_sim_batch_grad)
+
         else:
             # norm_change_batch_grad, denoise_signal_1, denoise_signal_2 = np.nan, np.nan, np.nan
             norm_change_batch_grad, denoise_signal_1 = np.nan, np.nan
             cosine_sim_batch_grad = np.nan
-
-        self.prev_cosine_sims.append(cosine_sim_batch_grad)
+        
         running_avg_of_cosine_sim = np.mean(self.prev_cosine_sims[-learner.base_config['running_avg_window_size']:])
 
         self.prev_grad = batch_grad
@@ -109,9 +124,13 @@ class AuxMetricsLogger(BaseCallback):
 
         denoise_signal_3 = learner.base_config['running_avg_window_size'] * norm_of_running_avg_of_batch_grad**2 - running_avg_of_squared_norm_batch_grad
 
-        return {'norm_batch_grad': norm_batch_grad,\
-                'norm_aux_batch_grad': norm_aux_batch_grad,\
-                'diff_sq_norm_main_aux_batch_grads': diff_sq_norm_main_aux_batch_grads,\
+
+        # pdb.set_trace()
+
+        # create return values dictionary
+        return_metrics = {'norm_batch_grad': norm_batch_grad,\
+                # 'norm_aux_batch_grad': norm_aux_batch_grad,\
+                # 'diff_sq_norm_main_aux_batch_grads': diff_sq_norm_main_aux_batch_grads,\
                 'norm_change_batch_grad': norm_change_batch_grad,\
                 'denoise_signal_1': denoise_signal_1,\
                 #'denoise_signal_2': denoise_signal_2,\
@@ -121,6 +140,12 @@ class AuxMetricsLogger(BaseCallback):
                 'running_avg_of_norm_batch_grad': running_avg_of_norm_batch_grad,\
                 'running_avg_of_squared_norm_batch_grad': running_avg_of_squared_norm_batch_grad,\
                 'denoise_signal_3': denoise_signal_3}
+
+        # throw out the nan values
+        return_metrics = {k: return_metrics[k] for k in return_metrics if not math.isnan(return_metrics[k])}
+        print(return_metrics)
+        
+        return return_metrics
 
     # TODO: add a time-series-ish epoch signal that characterizes "d metric / d epoch" ?
     # TODO: compute running average of cosine similarity
@@ -135,6 +160,8 @@ class AuxMetricsLogger(BaseCallback):
         # TODO: check correctness
         # after training in the current epoch, log the average of batch metrics in this epoch
         for k in self.batch_metrics.keys():
+            print('length of logged batch-wise {} is {}'.format(k, len(self.batch_metrics[k])))
+            print('at epoch {}, log batch metric {}'.format(learner.epoch, k), self.batch_metrics[k])
             self.aux_epoch_metrics[k].append(np.mean(self.batch_metrics[k]))
 
     def on_val_end(self, learner):

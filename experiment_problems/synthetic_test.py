@@ -35,7 +35,6 @@ def problem_evaluate(X, is_multitask, checkpoint_fidelities = checkpoint_fidelit
         for frac_fid in checkpoint_fidelities:
             checkpoints.append(int(max_iters * s * frac_fid))
 
-
         for checkpoint in checkpoints:
             print('evaluating at checkpoint {}'.format(checkpoint))
             if checkpoint < max_iters - 1:
@@ -59,5 +58,4 @@ March 14 observations
 2. when sampling at fidelity = 1, acquisition function value is negative? 
    but when sampling at 0.25, acquisition function value becomes positive again ... interesting
 3. think about how to effectively compare STMF and MTMF in this scenario
-
 """

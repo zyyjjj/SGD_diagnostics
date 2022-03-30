@@ -43,6 +43,27 @@ class ModifiedMaternKernel(MaternKernel):
         return super().forward(x1, x2, **params)
 
 
+class ModifiedIndexKernel(IndexKernel):
+    def __init__(self, num_tasks, rank=1, prior=None, var_constraint=None, **kwargs):
+        super().__init__(num_tasks, **kwargs)
+        if prior is not None:
+            self.register_prior(
+                "IndexKernelPrior", 
+                prior, 
+                lambda m: m.covar_fac,
+                lambda m, v: m._set_covar_fac(v))
+
+    @property
+    def covar_fac(self):
+        return self.covar_factor
+
+    @covar_fac.setter
+    def covar_fac(self, value):
+        self._set_covar_fac(value)
+
+    def _set_covar_fac(self, value):
+        # value is a num_tasks x 1 tensor
+        self.initialize(covar_factor = value)
 
 
 

@@ -4,6 +4,9 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, random_split, Subset
 import random, time, copy, os
 from collections import defaultdict
+from torch.nn.utils import parameters_to_vector
+import pdb
+
 
 def listify(o):
     if o is None: return []
@@ -63,8 +66,15 @@ class Learner():
         
             self.current_training_loss = 0.0
 
+            # pdb.set_trace()
+
             for train_input, train_output in self.train_loader:
                 self._evoke_callback('on_train_batch_start')
+
+                # print('number of mini-batches: {}'.format(len(self.train_loader)))
+
+                self.model.zero_grad()
+                print(next(self.model.parameters()).is_cuda)
 
                 # train and log
                 train_input, train_output = train_input.to(device), train_output.to(device)
@@ -72,15 +82,26 @@ class Learner():
                 loss.backward() 
 
                 # compute auxiliary gradient for a larger batch size
-                self.aux_model = copy.deepcopy(self.model)
-                aux_loss = self.loss_fn(self.aux_model(aux_input), aux_output, **self.loss_fn_kwargs)
-                aux_loss.backward()
+                # self.aux_model = copy.deepcopy(self.model)
+                # aux_loss = self.loss_fn(self.aux_model(aux_input), aux_output, **self.loss_fn_kwargs)
+                # aux_loss.backward()
 
                 self._evoke_callback('on_after_backward')
 
-                self.optimizer.step() 
-                self.optimizer.zero_grad() 
+                old_params = parameters_to_vector([p for p in self.model.parameters()])
 
+                self.optimizer.step() 
+
+                # self.optimizer.zero_grad() # TODO: remember to change back
+                # self.model.zero_grad(set_to_none=True)
+
+                new_params = parameters_to_vector([p for p in self.model.parameters()])
+
+                # Adam updates the parameters even if current gradient is zero
+                print('parameters changed after step(): ', old_params != new_params)
+                print('change in parameters', new_params - old_params)
+
+                # pdb.set_trace()
                 self.current_training_loss += loss.item()
 
                 self._evoke_callback('on_train_batch_end')
@@ -119,6 +140,10 @@ class Learner():
             self.epoch_metrics['val_loss'].append(self.current_val_loss)
             self.epoch_metrics['val_acc'].append(self.current_val_acc.item())
 
+            earlier_epoch = max(0, self.epoch - 10)
+            self.epoch_metrics['val_acc_improvement'].append(self.epoch_metrics['val_acc'][-1] - self.epoch_metrics['val_acc'][earlier_epoch])
+            self.epoch_metrics['val_loss_decrease'].append(self.epoch_metrics['val_loss'][-1] - self.epoch_metrics['val_loss'][earlier_epoch])
+
             self._evoke_callback('on_val_end')
 
             # TODO: Probably don't need test set here; revisit.
@@ -133,10 +158,7 @@ class Learner():
 
         print('end training at epoch {}'.format(self.epoch))
 
-        earlier_epoch = max(0, self.epoch - 10)
-        self.epoch_metrics['val_acc_improvement'] = [self.epoch_metrics['val_acc'][-1] - self.epoch_metrics['val_acc'][earlier_epoch]]
-        self.epoch_metrics['val_loss_improvement'] = [self.epoch_metrics['val_loss'][-1] - self.epoch_metrics['val_loss'][earlier_epoch]]
-
+        
         return self.epoch_metrics
 
 

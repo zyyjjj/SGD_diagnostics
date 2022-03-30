@@ -19,7 +19,7 @@ return_metrics = {
     'denoise_signal_1': 'last',
     'norm_of_running_avg_of_batch_grad': 'last',
     'epoch_accum_grad': 'last',
-    'val_loss_improvement': 'last', 
+    'val_loss_decrease': 'last', 
     'val_acc_improvement': 'last'
 }
 

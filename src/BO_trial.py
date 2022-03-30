@@ -24,9 +24,12 @@ from botorch.models.kernels.exponential_decay import ExponentialDecayKernel
 
 from gpytorch.mlls import ExactMarginalLogLikelihood
 from gpytorch.kernels import ScaleKernel, MaternKernel, IndexKernel, ProductKernel
+from gpytorch.priors.torch_priors import GammaPrior
 
+from .models.kernels import ModifiedIndexKernel
 from .utils.plotting import plot_progress, plot_acqf_vals_and_fidelities
-from .utils.multi_task_fidelity_utils import process_multitask_data, expand_intermediate_fidelities, get_task_covariance
+from .utils.multi_task_fidelity_utils import get_fidelity_covariance, print_kernel_hyperparams, process_multitask_data, expand_intermediate_fidelities, \
+    get_task_covariance, get_task_fidelity_covariance
 
 
 def BO_trial(
@@ -127,7 +130,7 @@ def BO_trial(
 
         log_best_so_far = []
         runtimes = []
-        cum_costs = [cost_model(X).sum().item()] # evaluate cost of sampling initial X
+        cum_costs = [cost_model(X[num_checkpoints-1 : : num_checkpoints]).sum().item()] # evaluate cost of sampling initial X
         
     print('loaded / generated data for {} BO iteration(s)'.format(init_batch_id))
     print('initial samples X and y: ', X, y)
@@ -139,7 +142,7 @@ def BO_trial(
         param_ranges['task_idx'] = ['int', [0, num_outputs-1]]
         # initial X does not contain the task column, so set add_last_col_X to True
         X, y = process_multitask_data(X, y, num_checkpoints, add_last_col_X = True)
-        max_posterior_mean = [y[::num_outputs].max().item()]
+        max_posterior_mean = [y[::num_outputs][(num_checkpoints-1)::num_checkpoints].max().item()]
     else:
         max_posterior_mean = [y.max().item()]
 
@@ -161,7 +164,7 @@ def BO_trial(
         # this calls fit_GP_model() inside
         new_pt, acqf_val, current_max_posterior_mean = optimize_acqf_and_suggest_new_pt(
             algo, X, y, objective, bounds, param_ranges, trial, is_multitask, use_additive_kernel, is_int, 
-            cost_aware_utility, project, fidelity_dim, num_outputs)
+            cost_aware_utility, project, fidelity_dim, num_outputs, num_checkpoints)
         # this should suggest a task-agnostic point (input, fidelity) since we observe all tasks
 
         max_posterior_mean.append(current_max_posterior_mean)
@@ -172,18 +175,24 @@ def BO_trial(
         print('shape of evaluation of newly sampled point {}'.format(new_y.shape))
 
         print('shape of newly sampled point before checkpoint-fidelity expansion {}'.format(new_pt.shape))
-        new_pt = expand_intermediate_fidelities(new_pt, checkpoint_fidelities, last_dim_is_task = True)
-        print('shape of newly sampled point after checkpoint-fidelity expansion {}'.format(new_pt.shape))
+        
 
         if is_multitask:
-            # new_pt contains the task column, so set add_last_col_X to False (default)
+            # last dimension of new_pt is the task column
+            new_pt = expand_intermediate_fidelities(new_pt, checkpoint_fidelities, last_dim_is_task = True)
+            print('shape of newly sampled point after checkpoint-fidelity expansion {}'.format(new_pt.shape))
+
             new_pt, new_y = process_multitask_data(new_pt, new_y, num_checkpoints, add_last_col_X=True)
             print('shape of newly sampled point and evaluation after multi-task expansion {}'.format(new_pt.shape, new_y.shape))
+        else:
+            new_pt = expand_intermediate_fidelities(new_pt, checkpoint_fidelities, last_dim_is_task = False)
+            print('shape of newly sampled point after checkpoint-fidelity expansion {}'.format(new_pt.shape))
+
 
         acqf_vals = torch.cat((acqf_vals, acqf_val))
 
         if cost_model is not None:
-            cum_costs.append(cum_costs[-1] + cost_model(new_pt)[0].item())
+            cum_costs.append(cum_costs[-1] + cost_model(new_pt)[-1].item())
         
         print('cumulative cost', cum_costs)
 
@@ -230,12 +239,15 @@ def fit_GP_model(X, y, is_multitask, use_additive_kernel, is_int=None, num_outpu
 
     if not is_multitask:
         if use_additive_kernel:
-            covar_module = MaternKernel(active_dims = torch.arange(0, X.shape[-1]-1)) + \
-                         ExponentialDecayKernel(active_dims = torch.tensor([X.shape[-1]-1]))
+            covar_module = ScaleKernel(MaternKernel(active_dims = torch.arange(0, X.shape[-1]-1))) + \
+                         ScaleKernel(ExponentialDecayKernel(active_dims = torch.tensor([X.shape[-1]-1])))
         else:
-            covar_module = MaternKernel(active_dims = torch.arange(0, X.shape[-1]-1)) * \
-                         ExponentialDecayKernel(active_dims = torch.tensor([X.shape[-1]-1]))
+            #covar_module = MaternKernel(active_dims = torch.arange(0, X.shape[-1]-1)) * \
+            #             ExponentialDecayKernel(active_dims = torch.tensor([X.shape[-1]-1]))
         
+            covar_module = ProductKernel(ScaleKernel(MaternKernel(active_dims = torch.arange(0, X.shape[-1]-1))), 
+                         ExponentialDecayKernel(active_dims = torch.tensor([X.shape[-1]-1])) )
+
         model = SingleTaskGP(X, y, covar_module=covar_module)
 
     else:
@@ -247,25 +259,33 @@ def fit_GP_model(X, y, is_multitask, use_additive_kernel, is_int=None, num_outpu
         # option 2: MISO kernel on {inputs} x task, exponentially decaying kernel on fidelity
 
         if use_additive_kernel:
-            covar_module = MaternKernel(active_dims = torch.arange(0, X.shape[-1]-2)) + \
-                            ExponentialDecayKernel(active_dims = torch.tensor([X.shape[-1]-2])) + \
-                            IndexKernel(active_dims = torch.tensor([X.shape[-1]-1]), num_tasks=num_outputs)
+            covar_module = ScaleKernel(MaternKernel(active_dims = torch.arange(0, X.shape[-1]-2))) + \
+                            ScaleKernel(ExponentialDecayKernel(active_dims = torch.tensor([X.shape[-1]-2]))) + \
+                            ScaleKernel(IndexKernel(active_dims = torch.tensor([X.shape[-1]-1]), num_tasks=num_outputs))
         else:
-            covar_module_ = MaternKernel(active_dims = torch.arange(0, X.shape[-1]-2)) * \
-                            ExponentialDecayKernel(active_dims = torch.tensor([X.shape[-1]-2])) * \
-                            IndexKernel(active_dims = torch.tensor([X.shape[-1]-1]), num_tasks=num_outputs)
-                        
-            covar_module = ProductKernel(
-                MaternKernel(active_dims = torch.arange(0, X.shape[-1]-2)),
-                ExponentialDecayKernel(active_dims = torch.tensor([X.shape[-1]-2])),
-                IndexKernel(active_dims = torch.tensor([X.shape[-1]-1]), num_tasks=num_outputs)
-            )
 
-        model = SingleTaskGP(X, y, covar_module = covar_module_) # TODO: check how the two ways of defining kernels differ
+            covar_module = ScaleKernel(ProductKernel(
+                MaternKernel(active_dims = torch.arange(0, X.shape[-1]-2)),
+                ExponentialDecayKernel(
+                    active_dims = torch.tensor([X.shape[-1]-2]), 
+                    lengthscale_prior=GammaPrior(3.0, 6.0),
+                    offset_prior=GammaPrior(3.0, 6.0),
+                    power_prior=GammaPrior(3.0, 6.0)
+                    ),
+                # TODO: check correctness of modified index kernel
+                ModifiedIndexKernel(
+                    active_dims = torch.tensor([X.shape[-1]-1]), 
+                    num_tasks=num_outputs,
+                    prior=GammaPrior(3.0, 6.0)
+                    )
+                ))
+
+        model = SingleTaskGP(X, y, covar_module = covar_module) # TODO: check how the two ways of defining kernels differ
 
         # TODO: Later, explore kernels that deal with integers better
 
     mll = ExactMarginalLogLikelihood(model.likelihood, model)
+    # pdb.set_trace()
     fit_gpytorch_model(mll)
 
     # TODO: saving (design, fidelity) is likely required for freeze-thaw
@@ -278,7 +298,8 @@ def fit_GP_model(X, y, is_multitask, use_additive_kernel, is_int=None, num_outpu
 
 def optimize_acqf_and_suggest_new_pt(
     algo, X, y, objective, bounds, param_ranges, trial, is_multitask, use_additive_kernel, 
-    is_int=None, cost_aware_utility = None, project = None, fidelity_dim = None, num_outputs = None):
+    is_int=None, cost_aware_utility = None, project = None, 
+    fidelity_dim = None, num_outputs = None, num_fidelities = None):
 
     """ General steps for a non-random-sampling algorithm:
     1. define and fit GP model
@@ -323,8 +344,13 @@ def optimize_acqf_and_suggest_new_pt(
 
         # fit a multi output GP model
         model = fit_GP_model(X, y, is_multitask, use_additive_kernel, is_int, num_outputs)
+        # print_kernel_hyperparams(model)
         # TODO: can I output the task and fidelity kernels here?
-        print('task covariance matrix', get_task_covariance(model, X, num_outputs))
+        if is_multitask:
+            print('task-fidelity covariance matrix', get_task_fidelity_covariance(model, X, num_outputs, num_fidelities))
+            print('task covariance matrix', get_task_covariance(model, X, num_outputs))
+            print('fidelity covariance matrix', get_fidelity_covariance(model))
+
 
         acqf = get_mfkg(model, objective, bounds, cost_aware_utility, project, fidelity_dim, is_multitask)
         
@@ -340,23 +366,23 @@ def optimize_acqf_and_suggest_new_pt(
             fixed_features = None
         
         # generate KG initial conditions with fidelity fixed to 1 and task fixed to 0 (if multi-task)
-        # note that bounds is still the full set of bounds, including those for the fixed features
+        # note that bounds is still the full set of bounds, including those that were fixed during get_mfkg()
         X_init = gen_one_shot_kg_initial_conditions(
             acq_function = acqf,
             bounds=bounds,
-            # fixed_features = fixed_features,
+            fixed_features = fixed_features,
             q=1,
-            num_restarts=10,
-            raw_samples=512,
+            num_restarts=10, # TODO: change back to 10
+            raw_samples=1024,
         )
 
         candidates, acqf_val = optimize_acqf(
             acq_function = acqf,
             bounds = bounds, 
             q = 1,
-            num_restarts = 10,
-            raw_samples = 512,
-            # fixed_features = fixed_features,
+            num_restarts = 10, # TODO: change back to 10
+            raw_samples = 1024,
+            fixed_features = fixed_features,
             batch_initial_conditions = X_init,
             options={"batch_limit": 5, "maxiter": 200},
         )
@@ -466,4 +492,4 @@ def get_mfkg(model, objective, bounds, cost_aware_utility, project, fidelity_dim
     )
 
 
-
+# TODO: Next is to understand how to inspect the task-fidelity covariance!
