@@ -26,6 +26,9 @@ def plot_progress(metric, cum_costs, results_folder, trial, max_posterior_mean =
     ax1.legend(p, [p_.get_label() for p_ in p], loc= 'upper left')
 
     fig.savefig(results_folder + 'visualization_trial_' + str(trial))
+    
+    # TODO: see if closing the figure frees up some memory
+    plt.close()
 
 
 def plot_acqf_vals_and_fidelities(acqf_vals, sampled_fidelites, results_folder, trial):
@@ -46,6 +49,7 @@ def plot_acqf_vals_and_fidelities(acqf_vals, sampled_fidelites, results_folder, 
     ax1.legend(p, [p_.get_label() for p_ in p], loc= 'upper left')
 
     fig.savefig(results_folder + 'acqf_vals_trial_' + str(trial))
+    plt.close()
 
 
 

@@ -5,8 +5,9 @@
 from typing import Callable
 from .BO_trial import BO_trial
 import os, sys
+from memory_profiler import profile
 
-
+@profile
 def experiment_manager(
     problem: Callable,
     problem_name: str,

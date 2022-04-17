@@ -143,7 +143,6 @@ class AuxMetricsLogger(BaseCallback):
 
         # throw out the nan values
         return_metrics = {k: return_metrics[k] for k in return_metrics if not math.isnan(return_metrics[k])}
-        print(return_metrics)
         
         return return_metrics
 
@@ -160,8 +159,8 @@ class AuxMetricsLogger(BaseCallback):
         # TODO: check correctness
         # after training in the current epoch, log the average of batch metrics in this epoch
         for k in self.batch_metrics.keys():
-            print('length of logged batch-wise {} is {}'.format(k, len(self.batch_metrics[k])))
-            print('at epoch {}, log batch metric {}'.format(learner.epoch, k), self.batch_metrics[k])
+            # print('length of logged batch-wise {} is {}'.format(k, len(self.batch_metrics[k])))
+            # print('at epoch {}, log batch metric {}'.format(learner.epoch, k), self.batch_metrics[k])
             self.aux_epoch_metrics[k].append(np.mean(self.batch_metrics[k]))
 
     def on_val_end(self, learner):

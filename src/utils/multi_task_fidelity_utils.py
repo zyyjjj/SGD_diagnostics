@@ -20,7 +20,7 @@ def process_multitask_data(X, y, num_checkpoints, add_last_col_X = False):
 
     num_trials = y.shape[0] // num_checkpoints
     num_outputs = y.shape[-1]
-    print('number of trials, ', num_trials, 'number of outputs, ', num_outputs)
+    # print('number of trials, ', num_trials, 'number of outputs, ', num_outputs)
 
     X_repeat = X.repeat_interleave(num_outputs, 0)
     # X_repeat = X.repeat(num_outputs, 1)
@@ -34,8 +34,8 @@ def process_multitask_data(X, y, num_checkpoints, add_last_col_X = False):
     
     new_y = y.flatten().unsqueeze(1) 
 
-    print('expanded X shape {}, value{}'.format(new_X.shape, new_X))
-    print('expanded y shape {}, value{}'.format(new_y.shape, new_y))
+    # print('expanded X shape {}, value{}'.format(new_X.shape, new_X))
+    # print('expanded y shape {}, value{}'.format(new_y.shape, new_y))
 
     return new_X, new_y
 
@@ -81,7 +81,7 @@ def get_task_fidelity_covariance(model, X, num_outputs, num_fidelities):
     fidelities = fidelities.unsqueeze(1).repeat(num_outputs, 1)
     
     test_X = torch.cat((X[:(num_outputs*num_fidelities), :-2], fidelities, tasks), 1)
-    print(test_X, test_X.shape)
+    # print(test_X, test_X.shape)
 
     covar_matrix = model.covar_module(test_X, test_X).evaluate().detach().numpy()
     diag_inv_sqrt = np.zeros((num_outputs*num_fidelities, num_outputs*num_fidelities))
@@ -97,9 +97,9 @@ def get_task_fidelity_covariance(model, X, num_outputs, num_fidelities):
 def get_task_covariance(model, X, num_outputs):
     #covar_matrix = model.covar_module(X[:num_outputs], X[:num_outputs]).evaluate().detach().numpy()
 
-    B = model.covar_module.state_dict()['base_kernel.kernels.2.covar_factor'].numpy()
-    v =  model.covar_module.base_kernel.kernels[2].raw_var_constraint.transform(
-        model.covar_module.state_dict()['base_kernel.kernels.2.raw_var']).numpy()
+    B = model.covar_module.kernels[2].covar_factor.detach().numpy()
+    v =  model.covar_module.kernels[2].raw_var_constraint.transform(
+        model.covar_module.kernels[2].raw_var.detach()).numpy()
     covar_matrix = np.matmul(B, np.transpose(B) ) + np.diag(np.exp(v))
 
     diag_inv_sqrt = np.zeros((num_outputs, num_outputs))
@@ -107,6 +107,8 @@ def get_task_covariance(model, X, num_outputs):
         diag_inv_sqrt[i,i] = 1 / np.sqrt(covar_matrix[i,i])
     
     result = diag_inv_sqrt @ covar_matrix @ diag_inv_sqrt
+
+    print('task covariance hyperparameters: B {}, v {}'.format(B, v))
 
     print('condition number of task covariance: {}'.format(np.linalg.cond(result)))
 
@@ -121,14 +123,22 @@ K(x_1, x_2) = w + beta^alpha / (x_1 + x_2 + beta)^alpha.
     `alpha` is a power parameter.
 """
 
+
 def get_fidelity_covariance(model, checkpoints = [0.25, 0.5, 1]):
 
-    w = model.covar_module.base_kernel.kernels[1].raw_offset_constraint.transform(
-        model.covar_module.state_dict()['base_kernel.kernels.1.raw_offset']).item()
-    beta = model.covar_module.base_kernel.kernels[1].raw_lengthscale_constraint.transform(
-        model.covar_module.state_dict()['base_kernel.kernels.1.raw_lengthscale']).item()
-    alpha = model.covar_module.base_kernel.kernels[1].raw_power_constraint.transform(
-        model.covar_module.state_dict()['base_kernel.kernels.1.raw_power']).item()
+    w = model.covar_module.kernels[1].raw_offset_constraint.transform(
+        model.covar_module.kernels[1].raw_offset.detach()).item()
+    beta = model.covar_module.kernels[1].raw_lengthscale_constraint.transform(
+        model.covar_module.kernels[1].raw_lengthscale.detach()).item()
+    alpha = model.covar_module.kernels[1].raw_power_constraint.transform(        
+        model.covar_module.kernels[1].raw_power.detach()).item()
+
+    print('fidelity kernel hyperparameters - raw: offset {}, lengthscale {}, power {}'.format(
+        model.covar_module.kernels[1].raw_offset.item(),
+        model.covar_module.kernels[1].raw_lengthscale.item(),
+        model.covar_module.kernels[1].raw_power.item()
+    ))
+    print('fidelity kernel hyperparamters: offset {}, lengthscale {}, power {}'.format(w, beta, alpha))
 
     num_checkpoints = len(checkpoints)
 

@@ -6,6 +6,8 @@ import random, time, copy, os
 from collections import defaultdict
 from torch.nn.utils import parameters_to_vector
 import pdb
+from memory_profiler import profile
+
 
 
 def listify(o):
@@ -24,11 +26,11 @@ def accuracy(outputs, labels):
 class Learner():
     def __init__(self, hp_config, model, train_ds, val_ds, opt, loss_fn, callbacks, run=None):
 
-        self.model, self.train_ds, self.val_ds = model, train_ds, val_ds
+        self.model, self.train_ds, self.val_ds = copy.deepcopy(model), train_ds, val_ds
         self.callbacks = listify(callbacks)
         self.base_config, self.opt_kwargs, self.loss_fn_kwargs = hp_config
         self.train_loader = DataLoader(train_ds, int(self.base_config['batch_size']), shuffle=True)
-        self.val_loader = DataLoader(val_ds, int(self.base_config['batch_size']))
+        self.val_loader = DataLoader(val_ds, int(self.base_config['batch_size']), shuffle = True)
         self.optimizer = opt(self.model.parameters(), self.base_config['lr'], **self.opt_kwargs)
         self.loss_fn = loss_fn
         self.run = run
@@ -41,6 +43,7 @@ class Learner():
 
         print('initiated learner with hp config ', hp_config)
         print('training data size: {}, validation data size: {}'.format(len(train_ds), len(val_ds)))
+        print('number of model parameters', count_params(self.model))
 
     def fit(self, num_epochs, device):
 
@@ -74,7 +77,7 @@ class Learner():
                 # print('number of mini-batches: {}'.format(len(self.train_loader)))
 
                 self.model.zero_grad()
-                print(next(self.model.parameters()).is_cuda)
+                # print(next(self.model.parameters()).is_cuda)
 
                 # train and log
                 train_input, train_output = train_input.to(device), train_output.to(device)
@@ -95,11 +98,9 @@ class Learner():
                 # self.optimizer.zero_grad() # TODO: remember to change back
                 # self.model.zero_grad(set_to_none=True)
 
-                new_params = parameters_to_vector([p for p in self.model.parameters()])
-
                 # Adam updates the parameters even if current gradient is zero
-                print('parameters changed after step(): ', old_params != new_params)
-                print('change in parameters', new_params - old_params)
+                new_params = parameters_to_vector([p for p in self.model.parameters()])
+                # print('fraction of parameters that changed in this minibatch SGD {}'.format(sum(old_params != new_params)/len(old_params)))
 
                 # pdb.set_trace()
                 self.current_training_loss += loss.item()
@@ -110,6 +111,7 @@ class Learner():
             toc_epoch_end = time.time()
             self.current_epoch_training_time = toc_epoch_end - tic_epoch_start
             self.current_training_loss /= len(self.train_loader)
+            print('at epoch {}, training loss {}'.format(self.epoch, self.current_training_loss))
 
             self.epoch_metrics['training_loss'].append(self.current_training_loss)
             self.epoch_metrics['training_time'].append(self.current_epoch_training_time)
@@ -132,6 +134,8 @@ class Learner():
                 val_acc = accuracy(pred_output, val_output)
                 self.current_val_acc += val_acc
 
+                # print('val batch accuracy {}, loss {}'.format(val_acc, val_loss))
+
                 self._evoke_callback('on_val_batch_end')
 
             self.current_val_loss /= len(self.val_loader)
@@ -139,6 +143,7 @@ class Learner():
 
             self.epoch_metrics['val_loss'].append(self.current_val_loss)
             self.epoch_metrics['val_acc'].append(self.current_val_acc.item())
+            print('at epoch {}, validation accuracy {}'.format(self.epoch, self.current_val_acc))
 
             earlier_epoch = max(0, self.epoch - 10)
             self.epoch_metrics['val_acc_improvement'].append(self.epoch_metrics['val_acc'][-1] - self.epoch_metrics['val_acc'][earlier_epoch])
@@ -167,3 +172,7 @@ class Learner():
             fn = getattr(callback, checkpoint_name)
             if callable(fn):
                 fn(self, *args, **kwargs)
+
+
+def count_params(model):
+    return sum(map(lambda p: p.data.numel(), model.parameters()))
