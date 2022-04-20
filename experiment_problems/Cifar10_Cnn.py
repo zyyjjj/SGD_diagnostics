@@ -17,8 +17,8 @@ HPs_to_VARY = {
     'lr': ['uniform', [-5, -2]],
     'log2_batch_size': ['int', [5, 10]],
     'log2_aux_batch_size': ['int', [5, 10]],
-    'n_channels_1': ['int', [32, 64]],
-    'n_channels_2': ['int',  [32, 64]],
+    'n_channels_1': ['int', [16, 32]],
+    'n_channels_2': ['int',  [16, 32]],
     'iteration_fidelity': ['uniform', [0.25, 1]]
 }
 
@@ -26,7 +26,7 @@ MultiFidelity_PARAMS = {
     "fidelity_dim": 5,
     "target_fidelities": {5: 1.0}, # {5: 1.0, 6: 0},
     "fidelity_weights": {5: 1},
-    "fixed_cost": 1
+    "fixed_cost": 0
 }
 
 checkpoint_fidelities = [0.25, 0.5, 1]
@@ -35,7 +35,8 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 transform = transforms.Compose(
     [transforms.ToTensor(),
-    transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
+    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+    # transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
     # transforms.RandomHorizontalFlip(0.4),
     # transforms.RandomAffine(0, translate  = (0.25, 0.25))
     ])
@@ -83,8 +84,8 @@ class CifarCnnModel(nn.Module):
 
             nn.Conv2d(in_channels = n_channels_2, out_channels = n_channels_2, kernel_size = 3, padding = 1),
             nn.ReLU(),
-            nn.Conv2d(in_channels = n_channels_2, out_channels = n_channels_2, kernel_size = 3, padding = 1),
-            nn.ReLU(),
+            # nn.Conv2d(in_channels = n_channels_2, out_channels = n_channels_2, kernel_size = 3, padding = 1),
+            # nn.ReLU(),
             nn.MaxPool2d(2,2), # output is n_channels_2 * 4 * 4
 
             nn.Flatten(),
@@ -96,6 +97,8 @@ class CifarCnnModel(nn.Module):
 
     def forward(self, x):
         return self.network(x)
+
+# TODO: should I add L2 regularization??? OR dropout on the last layer
 
 def problem_evaluate(X, return_metrics, designs = HPs_to_VARY, checkpoint_fidelities = checkpoint_fidelities, debug = DEBUG):
     """
@@ -123,6 +126,7 @@ def problem_evaluate(X, return_metrics, designs = HPs_to_VARY, checkpoint_fideli
             'batch_size': 2**(X[i][1].item()),
             'aux_batch_size': 2**(X[i][2].item()),
             'running_avg_window_size': 10}        
+        # hp_config = [base_config, {'momentum': 0.9}, {}] # TODO: manually fixed SGD momentum to be 0.9 here
         hp_config = [base_config, {}, {}]
 
         print('sampled config', X[i])
@@ -132,8 +136,8 @@ def problem_evaluate(X, return_metrics, designs = HPs_to_VARY, checkpoint_fideli
 
         # pdb.set_trace()
 
-        # optimizer = torch.optim.Adam
-        optimizer = torch.optim.SGD
+        optimizer = torch.optim.Adam
+        # optimizer = torch.optim.SGD
 
         if debug:
             train_size = 4000
@@ -157,11 +161,6 @@ def problem_evaluate(X, return_metrics, designs = HPs_to_VARY, checkpoint_fideli
             #EarlyStopping(metric = 'val_acc', patience = 5, warmup = 20, to_minimize=False, tolerance_thresh=0.05),
             AuxMetricsLogger()
         ]
-        # learner at 0x7f674709c610
-        # learner.model.parameters() 0x7f66e044fac0 -- this changes every round 0x7f66e0345f20 
-        # learner.model.parameters() 0x7f1a465d8ac0
-        # self.model.parameters()  0x7f1a465d8a50
-        # but loss is increasing
 
         learner = Learner(hp_config, model, train_ds, val_ds, optimizer, loss_fn, callbacks)
         
@@ -192,14 +191,15 @@ def problem_evaluate(X, return_metrics, designs = HPs_to_VARY, checkpoint_fideli
                 if t == 'mean':
                     out = np.mean(logged_performance_metrics[k][:checkpoint])
                 elif t == 'last':
-                    print('key: ', k)
-                    print(logged_performance_metrics[k])
-                    # print('length of stored metric history: ', len(logged_performance_metrics[k]) )
+                    # print('key: ', k)
+                    # print(logged_performance_metrics[k])
                     out = logged_performance_metrics[k][checkpoint-1] 
                     # TODO: there's a bug here?
                     # likely because I only logged one number rather than the full history for some metrics
                 elif t == 'max':
                     out = max(logged_performance_metrics[k][:checkpoint])
+                    # print('key: ', k)
+                    # print(logged_performance_metrics[k])
                 elif t == 'min':
                     out = min(logged_performance_metrics[k][:checkpoint])
             

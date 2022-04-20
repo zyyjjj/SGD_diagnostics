@@ -3,6 +3,7 @@ from Cifar10_Cnn import HPs_to_VARY, MultiFidelity_PARAMS, checkpoint_fidelities
 import sys
 import torch
 sys.path.append('..')
+
 from src.experiment_manager import experiment_manager
 
 # Basic skeleton for running an experiment
@@ -28,7 +29,6 @@ algo = sys.argv[2] # could be 'EI', 'KG'
 is_multitask = bool(int(sys.argv[3])) # 1 if multi-task; 0 if single-task
 use_additive_kernel = bool(int(sys.argv[4])) # 1 if using additive kernel; 0 if using product kernel
 
-# TODO: have problem_evaluate take intermediate_fidelites as argument
 if not is_multitask:
     # only return the one main metric
     key0, val0 = list(return_metrics.items())[0]
@@ -53,6 +53,9 @@ tkwargs = {
     "dtype": torch.double,
     "device": torch.device("cuda:0" if torch.cuda.is_available() else "cpu"),
 }
+
+
+print('start running Cifar_10_Cnn_runner.py')
 
 experiment_manager(
     problem = problem_evaluate_fixed_metrics,
