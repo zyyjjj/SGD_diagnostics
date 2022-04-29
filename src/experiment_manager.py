@@ -5,9 +5,7 @@
 from typing import Callable
 from .BO_trial import BO_trial
 import os, sys
-from memory_profiler import profile
 
-@profile
 def experiment_manager(
     problem: Callable,
     problem_name: str,
@@ -21,7 +19,7 @@ def experiment_manager(
     restart: bool,
     verbose: bool,
     is_multitask: bool,
-    use_additive_kernel = None,
+    kernel_name = None,
     multifidelity_params = None,
     checkpoint_fidelities = None,
     **tkwargs
@@ -55,7 +53,7 @@ def experiment_manager(
             restart=restart,
             verbose = verbose,
             is_multitask = is_multitask,
-            use_additive_kernel = use_additive_kernel,
+            kernel_name = kernel_name,
             multifidelity_params = multifidelity_params,
             checkpoint_fidelities = checkpoint_fidelities,
             **tkwargs

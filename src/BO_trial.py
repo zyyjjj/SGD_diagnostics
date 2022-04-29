@@ -6,8 +6,6 @@ import numpy as np
 import pdb, time, argparse, itertools, copy
 import sys, os
 from collections import defaultdict
-# from memory_profiler import profile
-import tracemalloc, linecache
 
 sys.path.append('../')
 
@@ -30,12 +28,12 @@ from gpytorch.mlls import ExactMarginalLogLikelihood
 from gpytorch.kernels import ScaleKernel, MaternKernel, IndexKernel, ProductKernel
 from gpytorch.priors.torch_priors import GammaPrior
 
-from .models.kernels import ModifiedIndexKernel
+from .models.kernels import ModifiedIndexKernel, IndicatorKernel
 from .utils.plotting import plot_progress, plot_acqf_vals_and_fidelities
 from .utils.multi_task_fidelity_utils import get_fidelity_covariance, print_kernel_hyperparams, process_multitask_data, expand_intermediate_fidelities, \
     get_task_covariance, get_task_fidelity_covariance
-from .utils.profiling import display_top, sizeof_fmt
 
+# TODO: import a list of kernels that I can call by string
 
 def BO_trial(
         problem_evaluate: Callable,
@@ -49,7 +47,7 @@ def BO_trial(
         restart: bool,
         verbose: bool,
         is_multitask = True,
-        use_additive_kernel = False,
+        kernel_name = 'matern_expdecay_index_product',
         multifidelity_params = None,
         checkpoint_fidelities = None,
         **tkwargs
@@ -60,10 +58,6 @@ def BO_trial(
     results_folder = script_dir + "/results/" + problem_name + "/" + algo + "/"
 
     print('starting trial {} for {}, saving results to {}'.format(trial, problem_name, results_folder))
-    print('use additive kernel = {}'.format(use_additive_kernel))
-
-    start_time_all = time.time()
-    tracemalloc.start(10)
 
     X = None
     y = []
@@ -140,7 +134,6 @@ def BO_trial(
         cum_costs = [cost_model(X[num_checkpoints-1 : : num_checkpoints]).sum().item()] # evaluate cost of sampling initial X
         
     print('loaded / generated data for {} BO iteration(s)'.format(init_batch_id))
-    # print('initial samples X and y: ', X, y)
     print('before BO start, X shape, y shape'.format(X.shape, y.shape))
 
     # if multi-output, process X and y to add task dimension to X
@@ -160,26 +153,21 @@ def BO_trial(
     weights = torch.cat((torch.tensor([1]), torch.zeros(num_outputs-1)))
     objective = ScalarizedPosteriorTransform(weights)
 
-    # print('number of outputs: {}; weights for linear objective: {}'.format(num_outputs, weights))
+    print('number of outputs: {}; weights for linear objective: {}'.format(num_outputs, weights))
+
+    # dictionary for logging data
+    out = {}
 
     for iter in range(init_batch_id, n_bo_iter+1):
-
+        
         print('starting BO iteration ', iter)
-
 
         start_time = time.time()
 
         # this calls fit_GP_model() inside
-        # TODO: try this hack I found in a github issue:
-
         new_pt, acqf_val, current_max_posterior_mean = optimize_acqf_and_suggest_new_pt(
-            algo, X, y, objective, bounds, param_ranges, trial, is_multitask, use_additive_kernel, is_int, 
-            cost_aware_utility, project, fidelity_dim, num_outputs, num_checkpoints, start_time_all = start_time_all)
-    
-        print('displaying sizes of local variables')
-        for name, size in sorted(((name, sys.getsizeof(value)) for name, value in locals().items()),
-                         key= lambda x: -x[1])[:10]:
-            print("{:>30}: {:>8}".format(name, sizeof_fmt(size)))
+            algo, X, y, objective, bounds, param_ranges, trial, is_multitask, kernel_name, is_int, 
+            cost_aware_utility, project, fidelity_dim, num_outputs, num_checkpoints)
 
         max_posterior_mean.append(current_max_posterior_mean)
         sampled_fidelities.append(new_pt[0][fidelity_dim].item())
@@ -188,7 +176,6 @@ def BO_trial(
         print('evaluation of newly sampled point {}'.format(new_y))
         print('shape of evaluation of newly sampled point {}'.format(new_y.shape))
         print('shape of newly sampled point before checkpoint-fidelity expansion {}'.format(new_pt.shape))
-        
 
         if is_multitask:
             # last dimension of new_pt is the task column
@@ -200,7 +187,6 @@ def BO_trial(
         else:
             new_pt = expand_intermediate_fidelities(new_pt, checkpoint_fidelities, last_dim_is_task = False)
             print('shape of newly sampled point after checkpoint-fidelity expansion {}'.format(new_pt.shape))
-
 
         acqf_vals = torch.cat((acqf_vals, acqf_val))
 
@@ -220,76 +206,50 @@ def BO_trial(
             log_best_so_far = y[::num_checkpoints].cummax(0).values[n_initial_pts-1:]
         else:
             log_best_so_far = y[::num_outputs][(num_checkpoints-1)::num_checkpoints].cummax(0).values[n_initial_pts-1:]
-        
-        # print('length of log_best_so_far', len(log_best_so_far))
-        # print('length of cum_cost', len(cum_costs))
             
         if verbose:
             print('Finished iteration {}, best value so far is {}'.format(iter, log_best_so_far[-1].item()))
 
-        np.save(results_folder + 'X/X_' + str(trial) + '.npy', X)
-        np.save(results_folder + 'output_at_X/output_at_X_' + str(trial) + '.npy', y)
-        np.save(results_folder + 'runtimes/runtimes_' + str(trial) + '.npy', runtimes)
-        np.save(results_folder + 'log_best_so_far_' + str(trial) + '.npy', log_best_so_far)
-        np.save(results_folder + 'acqf_vals_' + str(trial) + '.npy', acqf_vals)
-        np.save(results_folder + 'cum_costs_' + str(trial) + '.npy', cum_costs)
+        # save results in dictionary
+        out['X'] = X
+        out['Y'] = y
+        out['runtimes'] = runtimes
+        out['best_so_far'] = log_best_so_far
+        out['acqf_vals'] = acqf_vals
+        out['cum_costs'] = cum_costs
+
+        torch.save(out, results_folder + 'trial_' + str(trial) + '_' + kernel_name) # TODO: make kernel name an input
 
         title = 'best objective value for ' + problem_name + ' with ' + algo
         if is_multitask:
             title += ' (multitask)'
 
-        # plot_progress([title, log_best_so_far], cum_costs, results_folder, trial, max_posterior_mean = max_posterior_mean)
-        # plot_acqf_vals_and_fidelities(acqf_vals, sampled_fidelities, results_folder, trial)
-
-        snapshot = tracemalloc.take_snapshot()
-        top_stats = snapshot.statistics('lineno')
-
-        # pick the line with biggest memory block (which may contain several smallest memory blocks)
-        stat = top_stats[0]
-        print("%s memory blocks: %.1f KiB" % (stat.count, stat.size / 1024))
-        for line in stat.traceback.format():
-            print(line)
+        plot_progress([title, log_best_so_far], cum_costs, results_folder, trial, max_posterior_mean = max_posterior_mean)
+        plot_acqf_vals_and_fidelities(acqf_vals, sampled_fidelities, results_folder, trial)
 
 
-def fit_GP_model(X, y, is_multitask, use_additive_kernel, is_int=None, num_outputs = None):
+def fit_GP_model(X, y, is_multitask, kernel_name, is_int=None, num_outputs = None):
 
-    # the modified matern kernel rounds the values for integer variables 
-    # before computing the kernel output
     # TODO: What kind of kernel to use is something we want to revisit later [P1]
 
-    # pdb.set_trace()
-
     if not is_multitask:
-        if use_additive_kernel:
-            covar_module = ScaleKernel(MaternKernel(active_dims = torch.arange(0, X.shape[-1]-1))) + \
-                         ScaleKernel(ExponentialDecayKernel(active_dims = torch.tensor([X.shape[-1]-1])))
-        else:
-            #covar_module = MaternKernel(active_dims = torch.arange(0, X.shape[-1]-1)) * \
-            #             ExponentialDecayKernel(active_dims = torch.tensor([X.shape[-1]-1]))
-        
-            covar_module = ProductKernel(ScaleKernel(MaternKernel(active_dims = torch.arange(0, X.shape[-1]-1))), 
-                         ExponentialDecayKernel(active_dims = torch.tensor([X.shape[-1]-1])) )
+        # if use_additive_kernel:
+        #     covar_module = ScaleKernel(MaternKernel(active_dims = torch.arange(0, X.shape[-1]-1))) + \
+        #                  ScaleKernel(ExponentialDecayKernel(active_dims = torch.tensor([X.shape[-1]-1])))
+        # else:
+        #     covar_module = ProductKernel(ScaleKernel(MaternKernel(active_dims = torch.arange(0, X.shape[-1]-1))), 
+        #                  ExponentialDecayKernel(active_dims = torch.tensor([X.shape[-1]-1])) )
 
-        model = SingleTaskGP(X, y, covar_module=covar_module)
+        # model = SingleTaskGP(X, y, covar_module=covar_module)
+        # TODO: deal with the single task case later
+        pass
 
     else:
-        # X = (design, fidelity, task); y = (output) 
-        # fit a single output GP
-
         # change to single task GP with my custom kernel on {inputs} x fidelity x task
         # option 1: matern on inputs, exponentially decaying kernel on fidelity, index kernel on task
         # option 2: MISO kernel on {inputs} x task, exponentially decaying kernel on fidelity
 
-        if use_additive_kernel:
-            covar_module = ScaleKernel(MaternKernel(active_dims = torch.arange(0, X.shape[-1]-2))) + \
-                            ScaleKernel(ExponentialDecayKernel(active_dims = torch.tensor([X.shape[-1]-2]))) + \
-                            ScaleKernel(IndexKernel(active_dims = torch.tensor([X.shape[-1]-1]), num_tasks=num_outputs))
-        else:
-
-            # TODO: could the reason that fidelity kernel is not learning be the ScaleKernel() 
-            # that wraps around the product kernel? 
-            # Should I get rid of the scale kernel / apply it inside? 
-            # TODO: write a flexible function to output the fidelity kernel
+        if kernel_name == 'matern_expdecay_index_product':
             covar_module = ProductKernel(
                 MaternKernel(active_dims = torch.arange(0, X.shape[-1]-2)),
                 ExponentialDecayKernel(
@@ -298,20 +258,45 @@ def fit_GP_model(X, y, is_multitask, use_additive_kernel, is_int=None, num_outpu
                     # offset_prior=GammaPrior(3.0, 6.0),
                     # power_prior=GammaPrior(3.0, 6.0)
                     ),
-                # TODO: check correctness of modified index kernel
                 ModifiedIndexKernel(
                     active_dims = torch.tensor([X.shape[-1]-1]), 
                     num_tasks=num_outputs,
                     # prior=GammaPrior(3.0, 6.0)
                     )
                 )
-
+            # Note to self: the reason I got rid of the prior is b/c if I apply them then fid kernel params are constantly at 0
+        elif kernel_name == 'matern_index_product':
+            covar_module = ProductKernel(
+                MaternKernel(active_dims = torch.arange(0, X.shape[-1]-1)),
+                ModifiedIndexKernel(
+                    active_dims = torch.tensor([X.shape[-1]-1]), 
+                    num_tasks = num_outputs,
+                    )
+                )
+        elif kernel_name == 'matern_index_additive':
+            covar_module = ProductKernel(
+                MaternKernel(active_dims = torch.arange(0, X.shape[-1]-2)),
+                ModifiedIndexKernel(
+                    active_dims = torch.tensor([X.shape[-1]-1]), 
+                    num_tasks=3,
+                    # prior=GammaPrior(3.0, 6.0)
+                    )
+                ) + ProductKernel(
+                    IndicatorKernel(X.shape[-1]-1), 
+                    MaternKernel(active_dims = torch.arange(0, X.shape[-1]-1))
+                )
+        elif kernel_name == 'matern_expdecay_index_additive':
+            covar_module = ScaleKernel(MaternKernel(active_dims = torch.arange(0, X.shape[-1]-2))) + \
+                            ScaleKernel(ExponentialDecayKernel(active_dims = torch.tensor([X.shape[-1]-2]))) + \
+                            ScaleKernel(IndexKernel(active_dims = torch.tensor([X.shape[-1]-1]), num_tasks=num_outputs))
+        else:
+            print('kernel name is not recognized')
+            
         model = SingleTaskGP(X, y, covar_module = covar_module) # TODO: check how the two ways of defining kernels differ
 
         # TODO: Later, explore kernels that deal with integers better
 
     mll = ExactMarginalLogLikelihood(model.likelihood, model)
-    # pdb.set_trace()
     fit_gpytorch_model(mll)
 
     # TODO: saving (design, fidelity) is likely required for freeze-thaw
@@ -321,9 +306,8 @@ def fit_GP_model(X, y, is_multitask, use_additive_kernel, is_int=None, num_outpu
  
     return model
 
-@profile
 def optimize_acqf_and_suggest_new_pt(
-    algo, X, y, objective, bounds, param_ranges, trial, is_multitask, use_additive_kernel, 
+    algo, X, y, objective, bounds, param_ranges, trial, is_multitask, kernel_name, 
     is_int=None, cost_aware_utility = None, project = None, 
     fidelity_dim = None, num_outputs = None, num_fidelities = None, **kwargs):
 
@@ -336,13 +320,11 @@ def optimize_acqf_and_suggest_new_pt(
     
     print('suggesting new point')
 
-    start_time_all = kwargs.get('start_time_all', 0)
-
     if algo == 'random':
         return generate_initial_samples(1, param_ranges, seed = trial)
 
     elif algo == 'EI':
-        model = fit_GP_model(X, y, is_multitask, use_additive_kernel, is_int)
+        model = fit_GP_model(X, y, is_multitask, kernel_name, is_int)
         # sampler = SobolQMCNormalSampler(num_samples=64)
         sampler = IIDNormalSampler(num_samples=64)
         if not is_multitask:
@@ -370,18 +352,7 @@ def optimize_acqf_and_suggest_new_pt(
     elif algo == 'KG':
 
         # fit a multi output GP model
-        first_size, first_peak = tracemalloc.get_traced_memory()
-        tracemalloc.reset_peak()
-        tmp_start_time = time.time()
-        print('SP: run fit_GP_model() at time ', tmp_start_time - start_time_all)
-        
-        model = fit_GP_model(X, y, is_multitask, use_additive_kernel, is_int, num_outputs)
-
-        second_size, second_peak = tracemalloc.get_traced_memory()
-        print('SP: finish running fit_GP_model(), took {} secs, {} MiB'.format(time.time()-tmp_start_time, (second_size-first_size)/1048576))
-        print('SP: peak memory usage in fit_GP(): {} MiB'.format(second_peak / 1048576))
-        tracemalloc.reset_peak()
-        print('SP: memory usage after fit_GP(): {} MiB'.format(tracemalloc.get_tracemalloc_memory() / 1048576))
+        model = fit_GP_model(X, y, is_multitask, kernel_name, is_int, num_outputs)
 
         # TODO: instead of printing, save these in a dictionary
         # if is_multitask:
@@ -389,25 +360,16 @@ def optimize_acqf_and_suggest_new_pt(
             # print('task covariance matrix', get_task_covariance(model, X, num_outputs))
             # print('fidelity covariance matrix', get_fidelity_covariance(model))
 
-        first_size, first_peak = tracemalloc.get_traced_memory()
-        tracemalloc.reset_peak()
-        tmp_start_time = time.time()
-        print('SP: run get_mfkg() to get KG acquisition function at time ', tmp_start_time - start_time_all)
-        
         acqf = get_mfkg(model, objective, bounds, cost_aware_utility, project, fidelity_dim, is_multitask)
-        print('get_mfkg() returns an instance of KG: ', isinstance(acqf, qKnowledgeGradient))
-
-        second_size, second_peak = tracemalloc.get_traced_memory()
-        print('SP: finish running get_mfkg(), took {} secs, {} MiB'.format(time.time()-tmp_start_time, (second_size-first_size)/1048576)) 
-        print('SP: peak memory usgae in get_mfkg(): {} MiB'.format(second_peak / 1048576))
-        tracemalloc.reset_peak()
-        print('SP: memory usage after get_mfkg(): {} MiB'.format(tracemalloc.get_tracemalloc_memory() / 1048576))
-
 
         current_max_posterior_mean = acqf.current_value
 
         # TODO: does fixing the task to be 0 affect the acqf optimization?
         # I think so, because it enforces evaluating the main task
+        # But then the algorithm doesn't know that other tasks will be observed as well, 
+        # so the between-task correlation learned so far won't enter the decision process.
+
+        # Sidenote: setting fixed_features here or not shouldn't matter b/c there's the project() operator already
         if is_multitask:
             fixed_features = {fidelity_dim + 1: 0} # fixed task to be 0
         else:
@@ -415,15 +377,6 @@ def optimize_acqf_and_suggest_new_pt(
         
         # generate KG initial conditions with fidelity fixed to 1 and task fixed to 0 (if multi-task)
         # note that bounds is still the full set of bounds, including those that were fixed during get_mfkg()
-        # TODO: this could also be expensive, since 
-        # "This init strategy internally solves an acqf maximization problem"
-
-        first_size, first_peak = tracemalloc.get_traced_memory()
-        tracemalloc.reset_peak()
-        tmp_start_time = time.time()
-        print('SP: run gen_one_shot_kg_initial_conditions() to get KG init conditions at time ', tmp_start_time - start_time_all)
-        
-        # with gpytorch.settings.fast_pred_var(False):
 
         X_init = gen_one_shot_kg_initial_conditions(
             acq_function = acqf,
@@ -435,21 +388,10 @@ def optimize_acqf_and_suggest_new_pt(
             options = {
                 'num_inner_restarts': 10, 
                 'raw_inner_samples': 512, # default is 20 and 1024
-                'batch_limit': 5
+                'batch_limit': 5 # if this is not specified, raw_inner_samples posterior computations happen at the same time, leading to OOM
                 } 
         )
-
-        second_size, second_peak = tracemalloc.get_traced_memory()
-        print('SP: finish running gen_one_shot_kg_initial_conditions(), took {} secs, {} MiB'.format(time.time()-tmp_start_time, (second_size-first_size)/1048576)) 
-        print('SP: peak memory usage in gen_one_shot_kg_initial_conditions(): {} MiB'.format(second_peak / 1048576))
-        tracemalloc.reset_peak()
-        print('SP: memory usage after gen_one_shot_kg_initial_conditions(): {} MiB'.format(tracemalloc.get_tracemalloc_memory() / 1048576))
-
-        first_size, first_peak = tracemalloc.get_traced_memory()
-        tracemalloc.reset_peak()
-        tmp_start_time = time.time()
-        print('SP: generated one-shot KG initial conditions, now run optimize_acqf() at time', tmp_start_time - start_time_all)
-        
+   
         candidates, acqf_val = optimize_acqf(
             acq_function = acqf,
             bounds = bounds, 
@@ -461,13 +403,6 @@ def optimize_acqf_and_suggest_new_pt(
             options={"batch_limit": 5, "maxiter": 200}, # TODO: see if decreasing maxiter helps
         )
         
-        second_size, second_peak = tracemalloc.get_traced_memory()
-        print('SP: finish running optimize_acqf(), took {} secs, {} MiB'.format(time.time()-tmp_start_time, (second_size-first_size)/1048576)) 
-        print('SP: peak memory usgae in optimize_acqf(): {} MiB'.format(second_peak / 1048576))
-        tracemalloc.reset_peak()
-        print('SP: memory usage after optimize_acqf(): {} MiB'.format(tracemalloc.get_tracemalloc_memory() / 1048576))
-
-
     if len(acqf_val.size()) == 0:
         acqf_val = acqf_val.unsqueeze(0)
     
@@ -534,8 +469,6 @@ def get_param_bounds(param_ranges):
 
 def get_mfkg(model, objective, bounds, cost_aware_utility, project, fidelity_dim, is_multitask):
 
-    # print('fidelity dim', fidelity_dim)
-
     if is_multitask:
         curr_val_acqf = FixedFeatureAcquisitionFunction(
             acq_function=PosteriorMean(model),
@@ -576,4 +509,4 @@ def get_mfkg(model, objective, bounds, cost_aware_utility, project, fidelity_dim
     )
 
 
-# TODO: Next is to understand how to inspect the task-fidelity covariance!
+# TODO: Next is to understand how to correctly inspect the task-fidelity covariance!

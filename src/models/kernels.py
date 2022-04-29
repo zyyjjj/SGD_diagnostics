@@ -1,3 +1,4 @@
+from pyparsing import java_style_comment
 import torch
 from torch import Tensor
 
@@ -6,11 +7,10 @@ from gpytorch.kernels.matern_kernel import MaternKernel
 from botorch.models import MultiTaskGP
 from botorch.models.kernels.exponential_decay import ExponentialDecayKernel
 
+from gpytorch.kernels import ScaleKernel, MaternKernel, IndexKernel, ProductKernel
 from torch.nn import ModuleList # is this needed?
-from gpytorch.kernels.index_kernel import IndexKernel
-from gpytorch.kernels.scale_kernel import ScaleKernel
-from gpytorch.kernels.matern_kernel import MaternKernel
 from gpytorch.priors.torch_priors import GammaPrior
+
 class ModifiedMaternKernel(MaternKernel):
     """
     Computes a covariance matrix based on the matern Kernel,
@@ -111,23 +111,29 @@ class IndicatorKernel(Kernel):
 
     def forward(self, x1, x2, **kwargs):
 
-        aligned = list(map(int, x1[..., self.dimension_to_align] == x2[..., self.dimension_to_align]))
-        return torch.diag(torch.tensor(aligned))
+        # aligned = list(map(int, x1[..., self.dimension_to_align] == x2[..., self.dimension_to_align]))
 
-    
+        output = torch.zeros((x1.shape[0], x2.shape[0]))
+        for i in range(x1.shape[0]):
+            for j in range(x2.shape[0]):
+                output[i,j] = int(x1[i, self.dimension_to_align] == x2[j, self.dimension_to_align])
+        
+        return output
 
+
+
+        
 if __name__ == '__main__':
 
     x1 = torch.tensor(
         [[1,2,3],
-        [1,2,4],
-        [1,2,5]]
+        [1,2,4]]
     )
 
     x2 = torch.tensor(
         [[1,2,3],
-        [1,2,6],
-        [1,2,5]]
+        [1,2,5],
+        [1,2,4]]
     )
 
     kernel = IndicatorKernel(2)
