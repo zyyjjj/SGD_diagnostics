@@ -21,44 +21,6 @@ from botorch.optim import optimize_acqf
 from botorch.optim.initializers import gen_one_shot_kg_initial_conditions
 from gpytorch.kernels import IndexKernel, MaternKernel, ProductKernel, ScaleKernel
 from gpytorch.mlls import ExactMarginalLogLikelihood
-# TODO: import a list of kernels that I can call by string
-
-
-
-
-
-
-
-
-
-
-
-"""
-INPUT_RANGES = {"x": ["uniform", [0.0, 1.0]], "iteration_fidelity": ["uniform", [0.25, 1]]}
-
-MULTIFIDELITY_PARAMS = {
-    # which dimension of the input is for fidelity
-    "fidelity_dim": 1,
-    # key = fidelity_dim, value = target fidelity we want to optimize at
-    "target_fidelities": {1: 1.0, 2: 0.0},
-    # key = fidelity_dim, value = the increase in cost per one unit of fidelity
-    "fidelity_weights": {1: 1.0},
-    # fixed cost of evaluation; cost of evaluating at fidelity s = fixed_cost + fidelity_weights value * s \propto s
-    "fixed_cost": 0.0,
-}
-
-tkwargs = {
-    "dtype": torch.double,
-    "device": torch.device("cpu"),  # torch.device("cuda" if torch.cuda.is_available() else "cpu"),
-}
-
-# fidelity values at which to save intermediate outputs
-CHECKPOINT_FIDELITIES = [0.25, 0.5, 1]
-num_checkpoints = len(CHECKPOINT_FIDELITIES)
-
-
-"""
-
 
 
 def problem_evaluate(X: torch.Tensor, checkpoint_fidelities: List, **tkwargs) -> torch.Tensor:
