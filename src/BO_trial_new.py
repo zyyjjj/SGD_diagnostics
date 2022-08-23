@@ -71,12 +71,12 @@ def expand_intermediate_fidelities_wtask(
     determined by `checkpoint_fidelities`.
 
     Args:
-        X: `trials x (input_dim + 2)` shape tensor,
+        X: `num_samples x (input_dim + 2)` shape tensor,
             where the last column is a task index,
             and the second last column is a fidelity value
         checkpoint_fidelities: list of numbers indicating the fractions of the fidelity value where we want to make intermediate observations
     Returns:
-        `(trials x len(checkpoint_fidelities)) x (input_dim + 1)` shape tensor
+        `(num_samples x len(checkpoint_fidelities)) x (input_dim + 1)` shape tensor
 
     Example: 1 trial, 2-dim design, 1-dim fidelity, checkpoint_fidelities = [0.25, 0.5, 1]
     Input: [[0.5, 0.5, 0.8, 0]]
@@ -107,10 +107,10 @@ def expand_intermediate_fidelities_notask(
     determined by `checkpoint_fidelities`.
 
     Args:
-        X: `trials x (input_dim + 1)` shape tensor, where the last column is a fidelity value
+        X: `num_samples x (input_dim + 1)` shape tensor, where the last column is a fidelity value
         checkpoint_fidelities: list of numbers indicating the fractions of the fidelity value where we want to make intermediate observations
     Returns:
-        `(trials x len(checkpoint_fidelities)) x (input_dim + 1)` shape tensor
+        `(num_samples x len(checkpoint_fidelities)) x (input_dim + 1)` shape tensor
 
     Example: 1 trial, 2-dim design, 1-dim fidelity, checkpoint_fidelities = [0.25, 0.5, 1]
     Input: [[0.5, 0.5, 0.8]]
@@ -135,15 +135,15 @@ def process_multitask_data(X: torch.Tensor, y: torch.Tensor, num_checkpoints: in
     Transform (multi-dim input, multi-dim output) data into (multi-dim input, single-dim output) data
 
     Args:
-        X: `(num_trials * num_checkpoints) x (input_dim + 1)`
+        X: `(num_samples * num_checkpoints) x (input_dim + 1)`
                 or `(num_trials * num_checkpoints) x (input_dim + 2)` shape tensor
-        y: `(num_trials * num_checkpoints) x output_dim` shape tensor
+        y: `(num_samples * num_checkpoints) x output_dim` shape tensor
         num_checkpoints:
         add_last_col_X:
 
     Returns:
-        new_X: `(num_trials * num_checkpoints * output_dim) x (input_dim + 2)` shape tensor
-        new_y: `(num_trials * num_checkpoints * output_dim) x 1` shape tensor
+        new_X: `(num_samples * num_checkpoints * output_dim) x (input_dim + 2)` shape tensor
+        new_y: `(num_samples * num_checkpoints * output_dim) x 1` shape tensor
     """
 
     num_trials = y.shape[0] // num_checkpoints
@@ -167,7 +167,7 @@ def fit_GP_model(X, y, num_outputs, **tkwargs):
     Fit a GP model based on given data
 
     Args:
-        X:
+        X: 
         y:
         num_outputs:
 
@@ -176,13 +176,18 @@ def fit_GP_model(X, y, num_outputs, **tkwargs):
 
     """
 
-    covar_module = ProductKernel(
-        MaternKernel(active_dims=torch.arange(0, X.shape[-1] - 1)),
-        IndexKernel(
-            active_dims=torch.tensor([X.shape[-1] - 1]),
-            num_tasks=num_outputs,
-        ),
-    )
+    if num_outputs == 1:
+        # if single-task, use Matern kernel on design and fidelity
+        covar_module = MaternKernel()
+    else:
+        # if multi-task, use product of Matern kernel and index kernel on tasks
+        covar_module = ProductKernel(
+            MaternKernel(active_dims=torch.arange(0, X.shape[-1] - 1)),
+            IndexKernel(
+                active_dims=torch.tensor([X.shape[-1] - 1]),
+                num_tasks=num_outputs,
+            ),
+        )
     print(f"Fitting GP model on {X.shape} and {y.shape}.")
     model = SingleTaskGP(
         X,
@@ -205,7 +210,7 @@ def generate_initial_samples(n_samples: int, param_ranges: Dict, seed: int = Non
         param_ranges:
 
     Returns:
-        initial_X:
+        initial_X: `n_samples x len(param_ranges)` tensor of initial design points
     """
     if seed is not None:
         torch.manual_seed(seed)
@@ -253,6 +258,7 @@ def get_param_bounds(param_ranges: Dict) -> Tuple[torch.Tensor, List]:
 def get_mfkg(
     model: Type[GPyTorchModel],
     bounds: torch.Tensor,
+    num_outputs: int,
     cost_aware_utility: Type[InverseCostWeightedUtility],
     project: Callable,
     fidelity_dim: int,
@@ -274,13 +280,26 @@ def get_mfkg(
     """
 
     # fix features to fidelity = 1, task = 0, since we care about the main task performance at the highest fidelity
-    curr_val_acqf = FixedFeatureAcquisitionFunction(
-        acq_function=PosteriorMean(model),
-        d=fidelity_dim + 2,
-        columns=[fidelity_dim, 2], # do not put negative indices here
-        values=[1.0, 0.0],
-    )
-    _bounds = bounds[:, :-2]
+    
+    if num_outputs > 1:
+        # multi-task
+        curr_val_acqf = FixedFeatureAcquisitionFunction(
+            acq_function=PosteriorMean(model),
+            d=fidelity_dim + 2,
+            columns=[fidelity_dim, fidelity_dim + 1], # do not put negative indices here
+            values=[1.0, 0.0],
+        )
+        _bounds = bounds[:, :-2]
+    else:
+        # single-task
+        curr_val_acqf = FixedFeatureAcquisitionFunction(
+            acq_function=PosteriorMean(model),
+            d=fidelity_dim + 1,
+            columns=[fidelity_dim], # do not put negative indices here
+            values=[1.0],
+        )
+        _bounds = bounds[:, :-1]
+    
     curr_val_acqf.to(**tkwargs)
 
     # get the largest mean (of the main task at highest fidelity) under the current posterior,
@@ -309,6 +328,7 @@ def get_mfkg(
 def optimize_acqf_and_suggest_new_pt(
     model: Type[GPyTorchModel],
     bounds: torch.Tensor,
+    num_outputs: int,
     param_ranges: Dict,
     trial: int,
     is_int: List[bool] = None,
@@ -318,7 +338,7 @@ def optimize_acqf_and_suggest_new_pt(
     **tkwargs
 ):
 
-    acqf = get_mfkg(model, bounds, cost_aware_utility, project, fidelity_dim)
+    acqf = get_mfkg(model, bounds, num_outputs, cost_aware_utility, project, fidelity_dim)
 
     current_max_posterior_mean = acqf.current_value
 
@@ -360,10 +380,14 @@ def optimize_acqf_and_suggest_new_pt(
     return candidates, acqf_val, current_max_posterior_mean
 
 
-
-def plot_model(model, task=0.0):
+# TODO: also plot observations as black stars？
+# but note that observations are not necessarily at the highest fidelity. so this is not feasible
+def plot_model(model, num_outputs, task=0.0):
     locs = torch.linspace(0.0, 1.0, 100).view(100, -1)
-    test_X = torch.concat((locs, torch.tensor([[1.0, task]]).repeat(100, 1)), dim=-1).unsqueeze(-2)
+    if num_outputs > 1:
+        test_X = torch.concat((locs, torch.tensor([[1.0, task]]).repeat(100, 1)), dim=-1).unsqueeze(-2)
+    else:
+        test_X = locs
     fig, ax = plt.subplots(1, 1, figsize=(12, 8))
     means = model.posterior(test_X).mean.detach().numpy().flatten()
     sd = np.sqrt(model.posterior(test_X).variance.detach().numpy().flatten())
@@ -371,7 +395,7 @@ def plot_model(model, task=0.0):
     lb = means - 1.96 * sd
     ax.plot(locs, means)
     ax.fill_between(locs.squeeze(), lb, ub, alpha=0.2)
-    plt.title(f"task = {task}")
+    plt.title(f"task = {task}: posterior mean at highest fidelity")
     plt.show()
 
 
@@ -381,9 +405,10 @@ def run_BO(
     n_initial_pts: int,
     n_bo_iter: int,
     trial: int,
-    multifidelity_params: Dict,
-    checkpoint_fidelities: List,
+    multifidelity_params: Dict = None,
+    checkpoint_fidelities: List = None,
     **tkwargs
+    # TODO: have it handle single-task GP
 ):
 
     # Get script directory
@@ -420,10 +445,14 @@ def run_BO(
     cum_costs = [
         cost_model(X[num_checkpoints - 1 :: num_checkpoints]).sum().item()
     ]  # evaluate cost of sampling initial X
-    param_ranges["task_idx"] = ["int", [0, num_outputs - 1]]
-    # initial X does not contain the task column, so set add_last_col_X to True
-    X, y = process_multitask_data(X, y, num_checkpoints, add_last_col_X=True)
-    max_posterior_mean = [y[::num_outputs][(num_checkpoints - 1) :: num_checkpoints].max().item()]
+
+    if num_outputs > 1:
+        param_ranges["task_idx"] = ["int", [0, num_outputs - 1]]
+        # initial X does not contain the task column, so set add_last_col_X to True
+        X, y = process_multitask_data(X, y, num_checkpoints, add_last_col_X=True)
+        max_posterior_mean = [y[::num_outputs][(num_checkpoints - 1) :: num_checkpoints].max().item()]
+    else:
+        max_posterior_mean = [y.max().item()]
 
     bounds, is_int = get_param_bounds(param_ranges)
 
@@ -435,13 +464,22 @@ def run_BO(
     for iter in range(init_batch_id, n_bo_iter + 1):
 
         print("starting BO iteration ", iter)
-        print(X)
-        print(y)
+        # print(X)
+        # print(y)
         model = fit_GP_model(X, y, num_outputs, **tkwargs)
-        plot_model(model, task=0.0)
-        plot_model(model, task=1.0)
+        for task_idx in range(num_outputs):
+            plot_model(model, num_outputs = num_outputs, task = float(task_idx))
+        # print('bounds', bounds)
         new_pt, acqf_val, current_max_posterior_mean = optimize_acqf_and_suggest_new_pt(
-            model, bounds, param_ranges, trial, is_int, cost_aware_utility, project, fidelity_dim
+            model = model, 
+            bounds = bounds, 
+            num_outputs = num_outputs,
+            param_ranges = param_ranges, 
+            trial = trial, 
+            is_int = is_int, 
+            cost_aware_utility = cost_aware_utility, 
+            project = project, 
+            fidelity_dim = fidelity_dim
         )
 
         max_posterior_mean.append(current_max_posterior_mean)
@@ -450,16 +488,21 @@ def run_BO(
         new_y = problem_evaluate(new_pt, checkpoint_fidelities = checkpoint_fidelities)
         print("evaluation of newly sampled point {}".format(new_y))
 
-        # last dimension of new_pt is the task column
-        new_pt = expand_intermediate_fidelities_wtask(new_pt, checkpoint_fidelities)
-        new_pt, new_y = process_multitask_data(new_pt, new_y, num_checkpoints, add_last_col_X=True)
+        
+        if num_outputs > 1:
+            # if num_outputs > 1, last dimension of new_pt is the task column
+            new_pt = expand_intermediate_fidelities_wtask(new_pt, checkpoint_fidelities)
+            new_pt, new_y = process_multitask_data(new_pt, new_y, num_checkpoints, add_last_col_X=True)
+        else:
+            # new_pt does not contain a task column, so just expand wrt the fidelities
+            new_pt = expand_intermediate_fidelities_notask(new_pt, checkpoint_fidelities)
 
         acqf_vals = torch.cat((acqf_vals, acqf_val))
 
         if cost_model is not None:
             cum_costs.append(cum_costs[-1] + cost_model(new_pt)[-1].item())
 
-        print("cumulative cost", cum_costs)
+        # print("cumulative cost", cum_costs)
 
         X = torch.cat((X, new_pt), dim=0)
         y = torch.cat((y, new_y), dim=0)
@@ -480,8 +523,7 @@ def run_BO(
 
         torch.save(out, results_folder + "trial_" + str(trial))  # TODO: make kernel name an input
 
-        title = "best objective value"
-
+        # title = "best objective value"
         # plot_progress([title, log_best_so_far], cum_costs, results_folder, trial, max_posterior_mean=max_posterior_mean)
         # plot_acqf_vals_and_fidelities(acqf_vals, sampled_fidelities, results_folder, trial)
 
