@@ -51,7 +51,7 @@ def problem_evaluate(X: torch.Tensor, checkpoint_fidelities: List, **tkwargs) ->
         for checkpoint in checkpoints:
             print("evaluating at checkpoint {}".format(checkpoint))
             if checkpoint < max_iters - 1:
-                task_1 = torch.randn(1)
+                task_1 = torch.randn(1)*0.1
             else:
                 task_1 = torch.tensor([y])
             task_0 = torch.tensor([y])
@@ -188,8 +188,8 @@ def fit_GP_model(X, y, num_outputs, **tkwargs):
         X,
         y,
         covar_module=covar_module,
-        #input_transform=Normalize(d=X.shape[-1]),
-        #outcome_transform=Standardize(m=y.shape[-1]),
+        input_transform=Normalize(d=X.shape[-1]),
+        outcome_transform=Standardize(m=y.shape[-1]),
     )
     mll = ExactMarginalLogLikelihood(model.likelihood, model)
     fit_gpytorch_model(mll)
@@ -362,7 +362,7 @@ def optimize_acqf_and_suggest_new_pt(
 
 
 def plot_model(model, task=0.0):
-    locs = torch.linspace(1.0, 5.0, 100).view(100, -1)
+    locs = torch.linspace(0.0, 1.0, 100).view(100, -1)
     test_X = torch.concat((locs, torch.tensor([[1.0, task]]).repeat(100, 1)), dim=-1).unsqueeze(-2)
     fig, ax = plt.subplots(1, 1, figsize=(12, 8))
     means = model.posterior(test_X).mean.detach().numpy().flatten()
@@ -383,6 +383,7 @@ def run_BO(
     trial: int,
     multifidelity_params: Dict,
     checkpoint_fidelities: List,
+    **tkwargs
 ):
 
     # Get script directory
@@ -408,6 +409,7 @@ def run_BO(
     # y has shape (num_trials * num_checkpoints) x num_outputs
     y = problem_evaluate(X, checkpoint_fidelities = checkpoint_fidelities)
     num_outputs = y.shape[-1]
+    num_checkpoints = len(checkpoint_fidelities)
 
     # this expands X to incorporate a column for fidelity, with a row for each fidelity checkpoint
     # expanded X has shape (n_initial_pts * num_checkpoints) * (input_dim + 1)
@@ -449,7 +451,7 @@ def run_BO(
         print("evaluation of newly sampled point {}".format(new_y))
 
         # last dimension of new_pt is the task column
-        new_pt = expand_intermediate_fidelities_wtask(new_pt, checkpoint_fidelities, last_dim_is_task=True)
+        new_pt = expand_intermediate_fidelities_wtask(new_pt, checkpoint_fidelities)
         new_pt, new_y = process_multitask_data(new_pt, new_y, num_checkpoints, add_last_col_X=True)
 
         acqf_vals = torch.cat((acqf_vals, acqf_val))
