@@ -160,37 +160,50 @@ def process_multitask_data(X: torch.Tensor, y: torch.Tensor, num_checkpoints: in
     new_y = y.flatten().unsqueeze(1)
 
     return new_X, new_y
-    
+
 
 def expand_fidelities_tasks(
     X: torch.Tensor, 
     checkpoint_fidelities: List, 
-    task_indices: List) -> torch.Tensor:
+    task_indices: List = None) -> torch.Tensor:
 
     """
     Expand a sample point (design, fidelity, task) to include all fidelities and tasks
 
     Args:
-        X: `num_samples x (input_dim + 2)` tensor, with last dim being task and second last dim being fidelity
+        X: if multi-task, `num_samples x (input_dim + 2)` tensor, with last dim being task and second last dim being fidelity;
+           if single-task, `num_samples x (input_dim + 1)` tensor, with last dim being fidelity;
         checkpoint_fidelities: list of fractions of the given fidelity value where we make intermediate observations
-        task_indices: list of indices for tasks
+        task_indices: list of indices for tasks; None if problem is single-task
     Returns:
-        `(num_samples * len(checkpoint_fidelities) * len(task_indices)) x (input_dim + 2)` tensor
+        if multi-task, `(num_samples * len(checkpoint_fidelities) * len(task_indices)) x (input_dim + 2)` tensor;
+        if single-task, `(num_samples * len(checkpoint_fidelities)) x (input_dim + 1)` tensor;
     """
 
-    # ignore the task column
-    X = X[..., :-1]
+    if task_indices is not None:  # multi-task case
+        
+        # ignore the task column
+        X = X[..., :-1]
 
-    # repeat the designs
-    designs = X[..., :-1].repeat_interleave(len(checkpoint_fidelities) * len(task_indices), 0)
-    # expand the fidelities to account for lower-fid checkpoints
-    fids = torch.kron(X[..., -1], torch.tensor(checkpoint_fidelities)).unsqueeze(1).repeat_interleave(len(task_indices),0)
-    # repeat the task indices
-    tasks = torch.tensor(task_indices).unsqueeze(1).repeat(len(X) * len(checkpoint_fidelities),1)
+        # repeat the designs
+        designs = X[..., :-1].repeat_interleave(len(checkpoint_fidelities) * len(task_indices), 0)
+        # expand the fidelities to account for lower-fid checkpoints
+        fids = torch.kron(X[..., -1], torch.tensor(checkpoint_fidelities)).unsqueeze(1).repeat_interleave(len(task_indices),0)
+        # repeat the task indices
+        tasks = torch.tensor(task_indices).unsqueeze(1).repeat(len(X) * len(checkpoint_fidelities),1)
 
-    result = torch.cat((designs, fids, tasks), dim=1)
+        result = torch.cat((designs, fids, tasks), dim=1)
+
+    else:  # single-task
+        # repeat the designs
+        designs = X[..., :-1].repeat_interleave(len(checkpoint_fidelities), 0)
+        # expand the fidelities to account for lower-fid checkpoints
+        fids = torch.kron(X[..., -1], torch.tensor(checkpoint_fidelities)).unsqueeze(1)
+        
+        result = torch.cat((designs, fids), dim=1)
 
     return result
+    
 
 
 def fit_GP_model(X, y, num_outputs, **tkwargs):
@@ -465,8 +478,7 @@ def run_BO(
     # specify which dim(s) of input are fidelities, what the target fidelities are
     fidelity_dim = multifidelity_params["fidelity_dim"]
     target_fidelities = multifidelity_params["target_fidelities"]
-    def project(X):
-        return project_to_target_fidelity(X=X, target_fidelities=target_fidelities)
+    
 
     # X has shape (n_initial_pts) * (input_dim + 1)
     X = generate_initial_samples(n_samples = n_initial_pts, param_ranges = param_ranges, seed = trial)
@@ -474,6 +486,15 @@ def run_BO(
     y = problem_evaluate(X, checkpoint_fidelities = checkpoint_fidelities)
     num_outputs = y.shape[-1]
     num_checkpoints = len(checkpoint_fidelities)
+
+    def project(X):
+        return project_to_target_fidelity(X=X, target_fidelities=target_fidelities)
+    def expand(X):
+        if num_outputs > 1:
+            task_indices = list(range(num_outputs))
+        else:
+            task_indices = None
+        return expand_fidelities_tasks(X=X, checkpoint_fidelities=checkpoint_fidelities, task_indices = task_indices) 
 
     # this expands X to incorporate a column for fidelity, with a row for each fidelity checkpoint
     # expanded X has shape (n_initial_pts * num_checkpoints) * (input_dim + 1)
@@ -519,7 +540,7 @@ def run_BO(
             is_int = is_int, 
             cost_aware_utility = cost_aware_utility, 
             project = project, 
-            # TODO: add expand argument
+            expand = expand, # TODO: check correctness
             fidelity_dim = fidelity_dim
         )
 
