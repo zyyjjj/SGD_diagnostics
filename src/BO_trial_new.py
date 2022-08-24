@@ -76,7 +76,7 @@ def expand_intermediate_fidelities_wtask(
             and the second last column is a fidelity value
         checkpoint_fidelities: list of numbers indicating the fractions of the fidelity value where we want to make intermediate observations
     Returns:
-        `(num_samples x len(checkpoint_fidelities)) x (input_dim + 1)` shape tensor
+        `(num_samples x len(checkpoint_fidelities)) x (input_dim + 2)` shape tensor
 
     Example: 1 trial, 2-dim design, 1-dim fidelity, checkpoint_fidelities = [0.25, 0.5, 1]
     Input: [[0.5, 0.5, 0.8, 0]]
@@ -110,7 +110,7 @@ def expand_intermediate_fidelities_notask(
         X: `num_samples x (input_dim + 1)` shape tensor, where the last column is a fidelity value
         checkpoint_fidelities: list of numbers indicating the fractions of the fidelity value where we want to make intermediate observations
     Returns:
-        `(num_samples x len(checkpoint_fidelities)) x (input_dim + 1)` shape tensor
+        `(num_samples * len(checkpoint_fidelities)) x (input_dim + 1)` shape tensor
 
     Example: 1 trial, 2-dim design, 1-dim fidelity, checkpoint_fidelities = [0.25, 0.5, 1]
     Input: [[0.5, 0.5, 0.8]]
@@ -160,6 +160,37 @@ def process_multitask_data(X: torch.Tensor, y: torch.Tensor, num_checkpoints: in
     new_y = y.flatten().unsqueeze(1)
 
     return new_X, new_y
+    
+
+def expand_fidelities_tasks(
+    X: torch.Tensor, 
+    checkpoint_fidelities: List, 
+    task_indices: List) -> torch.Tensor:
+
+    """
+    Expand a sample point (design, fidelity, task) to include all fidelities and tasks
+
+    Args:
+        X: `num_samples x (input_dim + 2)` tensor, with last dim being task and second last dim being fidelity
+        checkpoint_fidelities: list of fractions of the given fidelity value where we make intermediate observations
+        task_indices: list of indices for tasks
+    Returns:
+        `(num_samples * len(checkpoint_fidelities) * len(task_indices)) x (input_dim + 2)` tensor
+    """
+
+    # ignore the task column
+    X = X[..., :-1]
+
+    # repeat the designs
+    designs = X[..., :-1].repeat_interleave(len(checkpoint_fidelities) * len(task_indices), 0)
+    # expand the fidelities to account for lower-fid checkpoints
+    fids = torch.kron(X[..., -1], torch.tensor(checkpoint_fidelities)).unsqueeze(1).repeat_interleave(len(task_indices),0)
+    # repeat the task indices
+    tasks = torch.tensor(task_indices).unsqueeze(1).repeat(len(X) * len(checkpoint_fidelities),1)
+
+    result = torch.cat((designs, fids, tasks), dim=1)
+
+    return result
 
 
 def fit_GP_model(X, y, num_outputs, **tkwargs):
@@ -322,6 +353,7 @@ def get_mfkg(
         current_value=current_value,
         cost_aware_utility=cost_aware_utility,
         project=project,
+        # TODO: add expand argument here
     )
 
 
@@ -338,7 +370,14 @@ def optimize_acqf_and_suggest_new_pt(
     **tkwargs
 ):
 
-    acqf = get_mfkg(model, bounds, num_outputs, cost_aware_utility, project, fidelity_dim)
+    acqf = get_mfkg(
+        model = model, 
+        bounds = bounds, 
+        num_outputs = num_outputs, 
+        cost_aware_utility = cost_aware_utility, 
+        project = project, 
+        fidelity_dim = fidelity_dim
+    )
 
     current_max_posterior_mean = acqf.current_value
 
@@ -407,8 +446,8 @@ def run_BO(
     trial: int,
     multifidelity_params: Dict = None,
     checkpoint_fidelities: List = None,
+    plot_stepwise = False,
     **tkwargs
-    # TODO: have it handle single-task GP
 ):
 
     # Get script directory
@@ -430,7 +469,7 @@ def run_BO(
         return project_to_target_fidelity(X=X, target_fidelities=target_fidelities)
 
     # X has shape (n_initial_pts) * (input_dim + 1)
-    X = generate_initial_samples(n_initial_pts, param_ranges, trial)
+    X = generate_initial_samples(n_samples = n_initial_pts, param_ranges = param_ranges, seed = trial)
     # y has shape (num_trials * num_checkpoints) x num_outputs
     y = problem_evaluate(X, checkpoint_fidelities = checkpoint_fidelities)
     num_outputs = y.shape[-1]
@@ -467,8 +506,9 @@ def run_BO(
         # print(X)
         # print(y)
         model = fit_GP_model(X, y, num_outputs, **tkwargs)
-        for task_idx in range(num_outputs):
-            plot_model(model, num_outputs = num_outputs, task = float(task_idx))
+        if plot_stepwise:
+            for task_idx in range(num_outputs):
+                plot_model(model, num_outputs = num_outputs, task = float(task_idx))
         # print('bounds', bounds)
         new_pt, acqf_val, current_max_posterior_mean = optimize_acqf_and_suggest_new_pt(
             model = model, 
@@ -479,6 +519,7 @@ def run_BO(
             is_int = is_int, 
             cost_aware_utility = cost_aware_utility, 
             project = project, 
+            # TODO: add expand argument
             fidelity_dim = fidelity_dim
         )
 
